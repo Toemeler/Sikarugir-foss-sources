@@ -148,10 +148,12 @@ def stikdebug_app(out_dir, raw_base):
             return None
         info = plistlib.loads(ipa.read(plist_name))
         app_dir = plist_name[: -len("Info.plist")]
-        # The largest top-level AppIcon PNG in the bundle is the best icon.
-        icons = [n for n in names if n.startswith(app_dir + "AppIcon")
-                 and n.endswith(".png") and "/" not in n[len(app_dir):]]
-        icon_url = None
+        # The largest icon PNG in the app bundle (not in nested bundles) is the
+        # best icon. Without one, Madeira's icon stands in: clients expect an
+        # iconURL on every app.
+        icons = [n for n in names if n.startswith(app_dir) and n.endswith(".png")
+                 and "/" not in n[len(app_dir):] and "icon" in n[len(app_dir):].lower()]
+        icon_url = f"{raw_base}/icon.png"
         if icons:
             best = max(icons, key=lambda n: ipa.getinfo(n).file_size)
             with open(os.path.join(out_dir, "stikdebug-icon.png"), "wb") as fh:
@@ -196,8 +198,7 @@ def stikdebug_app(out_dir, raw_base):
         "downloadURL": download_url,
         "size": len(data),
     }
-    if icon_url:
-        app["iconURL"] = icon_url
+    app["iconURL"] = icon_url
     print(f"StikDebug {version} ({info['CFBundleIdentifier']}) listed")
     return app
 

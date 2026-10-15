@@ -33,7 +33,15 @@ for path in "$@"; do
 done
 rm -rf "$STAGING"
 
-git add -A -- "$@"
+# Only paths that exist or are tracked: git add fails on a path that is
+# neither (an optional output this run did not produce).
+ADD=()
+for path in "$@"; do
+  if [ -e "$path" ] || git ls-files --error-unmatch -- "$path" >/dev/null 2>&1; then
+    ADD+=("$path")
+  fi
+done
+git add -A -- "${ADD[@]}"
 if git diff --cached --quiet; then
   echo "nothing to commit"
   exit 0
