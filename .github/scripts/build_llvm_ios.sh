@@ -75,11 +75,15 @@ cmake -S llvm-project/llvm -B llvm-ios-build "${COMMON[@]}" \
   -DLLVM_DEFAULT_TARGET_TRIPLE=arm64-apple-ios17.0 \
   -DLLVM_TARGET_ARCH=host \
   -DLLVM_BUILD_TOOLS=Off \
+  -DLLVM_INCLUDE_TOOLS=Off \
   -DLLVM_BUILD_UTILS=Off \
   -DLLVM_TABLEGEN="$TC/llvm-host-build/bin/llvm-tblgen"
-# Only the static libraries (llvm-libraries): the default target also builds
-# the tools, fuzzers and the LLVMHello plugin module, which Apple's linker
-# cannot link for iOS.
+# Only the static libraries (llvm-libraries), and no tools/ at all
+# (LLVM_INCLUDE_TOOLS=Off): the default target builds the tools, fuzzers and
+# the LLVMHello plugin, and tools/ adds two shared libraries (libLTO,
+# libRemarks) that llvm-libraries pulls in. CMake reports the platform as
+# "iOS", not "Darwin", so LLVM links those with GNU-only flags (-z defs) that
+# Apple's linker rejects.
 ninja -C llvm-ios-build -j"$JOBS" llvm-libraries
 
 echo "=== pruning to what DXMT reads ==="
