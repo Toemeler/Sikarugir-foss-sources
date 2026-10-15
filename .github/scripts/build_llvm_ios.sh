@@ -77,7 +77,10 @@ cmake -S llvm-project/llvm -B llvm-ios-build "${COMMON[@]}" \
   -DLLVM_BUILD_TOOLS=Off \
   -DLLVM_BUILD_UTILS=Off \
   -DLLVM_TABLEGEN="$TC/llvm-host-build/bin/llvm-tblgen"
-ninja -C llvm-ios-build -j"$JOBS"
+# Only the static libraries (llvm-libraries): the default target also builds
+# the tools, fuzzers and the LLVMHello plugin module, which Apple's linker
+# cannot link for iOS.
+ninja -C llvm-ios-build -j"$JOBS" llvm-libraries
 
 echo "=== pruning to what DXMT reads ==="
 rm -rf llvm-host-build
