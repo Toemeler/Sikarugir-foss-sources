@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # Build Madeira.app with code signing disabled.
 #
-# usage: build_app.sh <marketing version> <build number>
+# usage: build_app.sh <marketing version> <build number> [SETTING=value ...]
+#
+# Extra build settings (the workflow passes Xcode's compilation cache) go
+# straight to xcodebuild.
 #
 # Debug on purpose: docs/BUILDING.md records it as the configuration that runs
 # the games ("Release builds have crashed the guest").
@@ -13,6 +16,7 @@ set -euo pipefail
 
 VERSION=$1
 BUILD=$2
+shift 2
 
 xcodebuild \
   -project app/Madeira.xcodeproj \
@@ -30,4 +34,5 @@ xcodebuild \
   DEVELOPMENT_TEAM="" \
   ONLY_ACTIVE_ARCH=NO \
   COMPILER_INDEX_STORE_ENABLE=NO \
+  "$@" \
   build
