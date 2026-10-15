@@ -38,7 +38,9 @@ grep -q 'SONAME_LIBGNUTLS' include/config.h || {
 }
 
 # Generated headers (IDL and friends) the unix sides include from the tree.
-make -j"$JOBS" include > make-include.out 2>&1 || { tail -50 make-include.out; exit 1; }
+# makedep names per-directory targets <dir>/all; a bare "include" is just the
+# existing directory, which make reports as up to date without building.
+make -j"$JOBS" include/all > make-include.out 2>&1 || { tail -50 make-include.out; exit 1; }
 
 ln -sfn build-macos "$WINE/build-arm64ec"
 echo "configured: $B"
