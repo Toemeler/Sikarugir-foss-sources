@@ -28663,9 +28663,16 @@ void ios_reserve_fex_arena(void)
 
     for (i = 0; i < ARRAY_SIZE(plan); i++)
     {
-        if (arena_size_cap && (unsigned long long)plan[i].size > arena_size_cap)
+        /* madeira-raft: a step over the cap is SHRUNK to the cap (64 KB granules), no
+         * longer skipped. Skipping made the ladder's 16/8/4/2 GB the only sizes there
+         * were, so arena-mb = 3072 gave a 2 GB arena. Raft (Unity, iPad Pro M4) needs
+         * that 3 GB: the guest window there is [0x7000000000, 0x7180000000), a 4 GB
+         * arena leaves Unity no room for its second 512 MB reserve and 2 GB runs FEX
+         * out of thread state. Steps at or under the cap are tried as before. */
+        int capped = arena_size_cap && (unsigned long long)plan[i].size > arena_size_cap;
+        if (capped && (arena_size_cap & ~0xffffull) < 0x10000000ull)
         {
-            dprintf( 2, "[fex-arena] ml995 SKIP %s (%llu MB) -- over the %llu MB cap\n",
+            dprintf( 2, "[fex-arena] ml995 SKIP %s (%llu MB) -- the %llu MB cap is under 256 MB\n",
                      plan[i].what, (unsigned long long)plan[i].size >> 20,
                      arena_size_cap >> 20 );
             continue;
@@ -28684,14 +28691,18 @@ void ios_reserve_fex_arena(void)
          * a mapping that landed outside is worse than none, because the whole
          * point is that FEX and Wine agree on where the arena is. */
         mach_vm_address_t addr = (mach_vm_address_t)plan[i].lo;
-        SIZE_T size = plan[i].size;
+        SIZE_T size = capped ? (SIZE_T)(arena_size_cap & ~0xffffull) : plan[i].size;
         void *base;
         kern_return_t kr;
 
+        if (capped)
+            dprintf( 2, "[fex-arena] ml995 %s shrunk to the %llu MB cap\n",
+                     plan[i].what, (unsigned long long)size >> 20 );
+
         /* madeira-bcd: env.MADEIRA_SC_PA_POOLS = 1 moves the first candidate 4 GB
          * up and holds the 4 GB below it (ios_sc_pa_hold_arena); without it this
-         * is never taken. */
-        if (i == 0 && ios_sc_pa_hold_arena( &addr, &size )) goto sc_arena_placed;
+         * is never taken. A capped first step never was (it used to be skipped). */
+        if (i == 0 && !capped && ios_sc_pa_hold_arena( &addr, &size )) goto sc_arena_placed;
 
         /* ml802: 64KiB alignment mask. Wine's allocation granularity is 64KiB and
          * FEX asks with Alignment=0x10000; a base that is merely page-aligned

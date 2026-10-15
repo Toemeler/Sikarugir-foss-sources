@@ -563,8 +563,12 @@ enum GameRecommendations {
     /// threads; the standard list's ec-hook reporter off. This screen's shape at 720
     /// lines, 30 FPS. Unity's scan-code keys and its GC heap need nothing here: both
     /// are Madeira's defaults. Without madeira-bcd's defaults, as for Elden Ring.
+    /// Version 2 (2026-10-15): a 3 GB emulator arena. On the iPad Pro M4
+    /// (build 18) the game's window is 6 GB; the 4 GB arena left Unity no room for
+    /// its second 512 MB reserve and it crashed at start, and 2 GB ran the emulator
+    /// out of room for its threads, so Unity hung.
     static let raft = GameRecommendation(
-        id: "raft", title: "Raft", version: 1,
+        id: "raft", title: "Raft", version: 2,
         config: """
         # Madeira's recommended settings for Raft (an 8 GB iPad; not device-tested yet).
         # Reset to Recommended, at the bottom of the game's settings, brings them back.
@@ -573,6 +577,7 @@ enum GameRecommendations {
         swap-min-mb = 1
         vram-mb = 2048
         avail-phys = 1
+        arena-mb = 3072
         env.MADEIRA_LOCK_ORPHAN = stamped
         env.MADEIRA_EC_HOOK_TRACE = 0
         """,

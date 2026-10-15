@@ -267,9 +267,11 @@ assert er['version'] == 1 and er['switches'] == ('wineVCRT: false, fastSync: tru
 # A 4 GB broad swap file, a 2 GB video memory budget, the memory left reported as available, the stamped
 # orphan-lock mode, the standard list's ec-hook reporter off; this screen's shape at 720 lines, 30 FPS.
 raft = presets['raft']
+# Version 2 (2026-10-15): a 3 GB emulator arena, between the 4 GB that left Unity's second 512 MB reserve no
+# room and the 2 GB that ran FEX out of thread state (iPad Pro M4, build 18).
 assert raft['tested'] == ['swap-mb = 4096', 'swap-mode = 2', 'swap-min-mb = 1', 'vram-mb = 2048', 'avail-phys = 1',
-                          'env.MADEIRA_LOCK_ORPHAN = stamped', 'env.MADEIRA_EC_HOOK_TRACE = 0'], raft['lines']
-assert raft['version'] == 1 and raft['switches'] == ('wineVCRT: false, fastSync: true, fpsMode: 3, '
+                          'arena-mb = 3072', 'env.MADEIRA_LOCK_ORPHAN = stamped', 'env.MADEIRA_EC_HOOK_TRACE = 0'], raft['lines']
+assert raft['version'] == 2 and raft['switches'] == ('wineVCRT: false, fastSync: true, fpsMode: 3, '
                                                      'resolution: GameRecommendation.screen720, display: "fit"'), raft
 # Little Nightmares Enhanced Edition, version 1 (owner's request, 2026-10-15, recommended values without a
 # review): Unreal on DXMT for an 8 GB iPad Pro M4; not device-tested yet. Raft's list with a 6 GB swap file.
