@@ -1,0 +1,40 @@
+{
+  "name": "Madeira",
+  "identifier": "io.github.toemeler.sikarugir-foss-sources",
+  "subtitle": "Windows PC games on iPhone and iPad",
+  "description": "Runs Windows PC games on iPhone and iPad without a jailbreak: FEX-Emu translates x86 code, Wine provides Windows, DXMT and Madeira's own Direct3D 12 layer draw with Metal. Sign in to Steam to install, update and start your games through Valve's own Windows client, with Steam Cloud saves, controllers, keyboard, mouse and trackpad.\n\nNeeds iOS 26 or later and JIT (StikDebug, or the built-in helper; on iOS 27 it can pair the device itself). Automatic build of github.com/willfaust/Madeira.",
+  "iconURL": "https://raw.githubusercontent.com/Toemeler/Sikarugir-foss-sources/main/icon.png",
+  "website": "https://github.com/Toemeler/Sikarugir-foss-sources",
+  "tintColor": "2E7D6B",
+  "apps": [
+    {
+      "name": "Madeira",
+      "bundleIdentifier": "com.willfaust.madeora",
+      "developerName": "Toemeler",
+      "subtitle": "Windows PC games on iPhone and iPad",
+      "localizedDescription": "Runs Windows PC games on iPhone and iPad without a jailbreak: FEX-Emu translates x86 code, Wine provides Windows, DXMT and Madeira's own Direct3D 12 layer draw with Metal. Sign in to Steam to install, update and start your games through Valve's own Windows client, with Steam Cloud saves, controllers, keyboard, mouse and trackpad.\n\nNeeds iOS 26 or later and JIT (StikDebug, or the built-in helper; on iOS 27 it can pair the device itself). Automatic build of github.com/willfaust/Madeira.",
+      "iconURL": "https://raw.githubusercontent.com/Toemeler/Sikarugir-foss-sources/main/icon.png",
+      "tintColor": "2E7D6B",
+      "category": "games",
+      "screenshots": [],
+      "versions": [
+        {
+          "version": "0.1.3.12",
+          "buildVersion": "12",
+          "date": "2026-10-15T15:09:06Z",
+          "localizedDescription": "Automatic build build-12.",
+          "downloadURL": "https://github.com/Toemeler/Sikarugir-foss-sources/releases/download/build-12/Madeira.ipa",
+          "size": 102868694,
+          "sha256": "4ff2a385789d60a6ce2691f0575a669e157d2c0c6a90be4024440f81ae41f288",
+          "minOSVersion": "26.0"
+        }
+      ],
+      "version": "0.1.3.12",
+      "versionDate": "2026-10-15T15:09:06Z",
+      "versionDescription": "Automatic build build-12.",
+      "downloadURL": "https://github.com/Toemeler/Sikarugir-foss-sources/releases/download/build-12/Madeira.ipa",
+      "size": 102868694
+    }
+  ],
+  "news": []
+}
