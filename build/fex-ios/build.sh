@@ -13,5 +13,6 @@ if [ ! -f "$B/CMakeCache.txt" ]; then
         -DBUILD_TESTING=OFF -DBUILD_THUNKS=OFF -DBUILD_FEXCONFIG=OFF -DBUILD_FEX_LINUX_TESTS=OFF \
         -DENABLE_FEX_ALLOCATOR=OFF -DENABLE_ASSERTIONS=OFF -DENABLE_CLANG_THUNKS=ON -DENABLE_CCACHE=ON
 fi
-cmake --build "$B" --target FEXCore FEXCore_Base
+# JemallocLibs only feeds FEXCore_shared, so it is named: the app links it.
+cmake --build "$B" --target FEXCore FEXCore_Base JemallocLibs
 ls "$B/FEXCore/Source/"*.a
