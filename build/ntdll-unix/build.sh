@@ -202,6 +202,11 @@ echo ""
 echo "Results: $SUCCEEDED succeeded, $FAILED failed"
 if [ -n "$FAILED_FILES" ]; then
     echo "Failed:$FAILED_FILES"
+    # The first errors of each failed unit, so a CI log says why.
+    for name in $FAILED_FILES; do
+        echo "--- $name.err ---"
+        grep -m 20 -B 2 -A 3 'error:' "$OBJ_DIR/$name.err" || head -40 "$OBJ_DIR/$name.err"
+    done
 fi
 
 echo ""
