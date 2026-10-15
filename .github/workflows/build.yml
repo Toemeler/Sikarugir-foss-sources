@@ -615,6 +615,20 @@ jobs:
           export PAGES_URL
           echo "Pages: ${PAGES_URL:-not enabled}"
           sips -Z 512 app/Madeira/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png --out icon.png
+
+          # StikDebug (formerly StikJIT), which enables Madeira's JIT, is listed
+          # too: the IPA of its newest release, linked from its own release.
+          # Best effort - without it the feed lists Madeira alone.
+          if REL=$(gh api repos/StikDebug/StikDebug/releases/latest 2>/dev/null) \
+             && STIK_URL=$(jq -re '[.assets[] | select(.name | endswith(".ipa"))][0].browser_download_url' <<<"$REL") \
+             && curl -fsSL --retry 3 -o stikdebug.ipa "$STIK_URL"; then
+            export STIK_IPA=stikdebug.ipa STIK_URL
+            export STIK_DATE=$(jq -r '.published_at' <<<"$REL")
+            export STIK_TAG=$(jq -r '.tag_name' <<<"$REL")
+            echo "StikDebug: $STIK_TAG ($STIK_URL)"
+          else
+            echo "::warning::StikDebug's latest release has no IPA to list; the feed lists Madeira only."
+          fi
           python3 .github/scripts/make_source.py .
 
       - name: Publish the release
@@ -678,7 +692,7 @@ jobs:
           echo "${{ steps.appcheck.outputs.stamp }}" > .build-stamp
           .github/scripts/commit_generated.sh \
             "Update source feed for ${{ steps.tag.outputs.tag }}" \
-            s.json apps.json icon.png index.html .build-stamp
+            s.json apps.json icon.png stikdebug-icon.png index.html .build-stamp
 
       - name: Stage the Pages site
         if: steps.appcheck.outputs.skip != 'true'
@@ -686,6 +700,7 @@ jobs:
           set -euo pipefail
           mkdir -p _site
           cp index.html s.json apps.json icon.png _site/
+          [ ! -f stikdebug-icon.png ] || cp stikdebug-icon.png _site/
           ls -l _site
 
       - name: Hand the site to the Pages job

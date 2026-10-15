@@ -5,9 +5,13 @@ Build facts come from the environment, so the workflow stays the single source
 of truth for version, size, bundle identifier and download URL.
 """
 import datetime as dt
+import hashlib
 import json
 import os
+import plistlib
+import re
 import sys
+import zipfile
 
 NAME = "Madeira"
 SUBTITLE = "Windows PC games on iPhone and iPad"
@@ -77,6 +81,11 @@ def main(out_dir):
         "size": size,
     }
 
+    apps = [app]
+    stik = stikdebug_app(out_dir, raw_base)
+    if stik:
+        apps.append(stik)
+
     source = {
         "name": NAME,
         "identifier": f"io.github.{owner.lower()}.{name.lower()}",
@@ -85,7 +94,7 @@ def main(out_dir):
         "iconURL": icon_url,
         "website": f"{server}/{repo}",
         "tintColor": TINT,
-        "apps": [app],
+        "apps": apps,
         "news": [],
     }
 
@@ -119,6 +128,78 @@ def main(out_dir):
             fh.write(f"source_url={source_url}\n")
             fh.write(f"raw_url={raw_url}\n")
             fh.write(f"pages_url={pages_site}\n")
+
+
+def stikdebug_app(out_dir, raw_base):
+    """StikDebug's newest release, when the workflow downloaded its IPA.
+
+    Name, bundle identifier, version and icon are read from the IPA itself, so
+    the entry always matches what the download installs.
+    """
+    path = os.environ.get("STIK_IPA")
+    if not path or not os.path.isfile(path):
+        return None
+    with zipfile.ZipFile(path) as ipa:
+        names = ipa.namelist()
+        plist_name = next((n for n in names
+                           if re.fullmatch(r"Payload/[^/]+\.app/Info\.plist", n)), None)
+        if not plist_name:
+            print("StikDebug IPA has no app Info.plist; not listed")
+            return None
+        info = plistlib.loads(ipa.read(plist_name))
+        app_dir = plist_name[: -len("Info.plist")]
+        # The largest top-level AppIcon PNG in the bundle is the best icon.
+        icons = [n for n in names if n.startswith(app_dir + "AppIcon")
+                 and n.endswith(".png") and "/" not in n[len(app_dir):]]
+        icon_url = None
+        if icons:
+            best = max(icons, key=lambda n: ipa.getinfo(n).file_size)
+            with open(os.path.join(out_dir, "stikdebug-icon.png"), "wb") as fh:
+                fh.write(ipa.read(best))
+            icon_url = f"{raw_base}/stikdebug-icon.png"
+    with open(path, "rb") as fh:
+        data = fh.read()
+
+    name = info.get("CFBundleDisplayName") or info.get("CFBundleName") or "StikDebug"
+    version = info.get("CFBundleShortVersionString") or os.environ.get("STIK_TAG", "1.0")
+    build = str(info.get("CFBundleVersion") or version)
+    date = os.environ.get("STIK_DATE") or dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    download_url = os.environ["STIK_URL"]
+    description = (
+        f"Enables JIT for Madeira. Release {os.environ.get('STIK_TAG', version)} "
+        "of github.com/StikDebug/StikDebug, listed here unmodified."
+    )
+    entry = {
+        "version": version,
+        "buildVersion": build,
+        "date": date,
+        "localizedDescription": description,
+        "downloadURL": download_url,
+        "size": len(data),
+        "sha256": hashlib.sha256(data).hexdigest(),
+    }
+    if info.get("MinimumOSVersion"):
+        entry["minOSVersion"] = info["MinimumOSVersion"]
+    app = {
+        "name": name,
+        "bundleIdentifier": info["CFBundleIdentifier"],
+        "developerName": "StikDebug",
+        "subtitle": "JIT for Madeira",
+        "localizedDescription": description,
+        "tintColor": TINT,
+        "category": "utilities",
+        "screenshots": [],
+        "versions": [entry],
+        "version": version,
+        "versionDate": date,
+        "versionDescription": description,
+        "downloadURL": download_url,
+        "size": len(data),
+    }
+    if icon_url:
+        app["iconURL"] = icon_url
+    print(f"StikDebug {version} ({info['CFBundleIdentifier']}) listed")
+    return app
 
 
 LANDING = """<!doctype html>
