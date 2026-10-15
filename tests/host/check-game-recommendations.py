@@ -65,19 +65,19 @@ for m in re.finditer(r'static let (\w+) = GameRecommendation\(\n\s*id: "([^"]+)"
     lines = [line[len(indent):] if line.startswith(indent) else line for line in body.split('\n')]
     presets[ident] = dict(name=name, title=title, version=int(version), lines=lines, switches=' '.join((switches or '').split()))
 assert set(presets) == {'rdr2-steam', 'rdr2-other', 'gta5e-steam', 'gta5e-other', 'ghost-of-tsushima', 'god-of-war',
-                        'horizon-zero-dawn', 'standard'}, sorted(presets)
+                        'horizon-zero-dawn', 'elden-ring', 'standard'}, sorted(presets)
 assert ('static let all = [rdr2Steam, rdr2Other, gta5EnhancedSteam, gta5EnhancedOther, ghostOfTsushima, godOfWar, horizonZeroDawn,\n'
-        '                      standard]') in lists_src
+        '                      eldenRing, standard]') in lists_src
 
 # madeira-bcd's defaults where upstream's differ: every game madeira-bcd ran had them,
 # so every game's own list ends with them. The standard list reaches every other game
-# and the Desktop, and has none of them.
+# and the Desktop, and has none of them; nor has Elden Ring's, which madeira-bcd never ran.
 FORK_DEFAULTS = ["# madeira-bcd's defaults, which this list was tested with (upstream's differ).",
                  'env.MADEIRA_FREE_DELAY_MS = 2000', 'env.MADEIRA_CTX_CPU_AREA = 2', 'env.MADEIRA_WAIT_CHILDREN = 1',
                  'env.MADEIRA_JIT_DUMP = 0']
 for ident, p in presets.items():
-    if ident == 'standard':
-        assert not set(FORK_DEFAULTS) & set(p['lines']), (ident, "the standard list has none of madeira-bcd's defaults")
+    if ident in ('standard', 'elden-ring'):
+        assert not set(FORK_DEFAULTS) & set(p['lines']), (ident, "this list has none of madeira-bcd's defaults")
         p['tested'], p['fork'] = p['lines'][2:], []
         continue
     assert p['lines'][-len(FORK_DEFAULTS):] == FORK_DEFAULTS, (ident, "the list ends with madeira-bcd's defaults")
@@ -105,7 +105,7 @@ for ident, p in presets.items():
         if key != 'env.WINEDLLOVERRIDES':
             named = named.replace('socialclubhelper.exe', '')
         assert 'socialclub' not in named and 'MADEIRA_DLL_LOCAL' not in line, (ident, line)
-print('PASS: eight lists, two comment lines each, every game list ends with the four fork defaults and the standard one has none, no key twice, '
+print('PASS: nine lists, two comment lines each, every game list but Elden Ring\'s ends with the four fork defaults and the standard one has none, no key twice, '
       'every non-env key in the settings catalog, no Social Club DLL lines, no variant DLL switches')
 
 # Red Dead Redemption 2 from Steam: the owner's list of 2026-10-09 (build 463), line for line,
@@ -240,14 +240,28 @@ assert hzd['tested'] == ['dxbc-register-spaces = 1', 'msc-unbounded-retry = 1', 
                             'env.MADEIRA_INPUT_FOREGROUND = 1', 'env.MADEIRA_WGI_HOST_PADS = 1',
                             'env.MADEIRA_LOCK_ORPHAN = stamped', 'env.MADEIRA_SRV_FGETPATH = 1',
                             'env.WINEDEBUG = fixme-input'], hzd['lines']
+er = presets['elden-ring']
 assert not any(line.startswith(('quiet-log', 'env.MADEIRA_SRV_FGETPATH'))
-               for p in presets.values() if p is not hzd for line in p['lines']), 'the build 494 switches are Horizon Zero Dawn\'s only'
+               for p in presets.values() if p is not hzd and p is not er for line in p['lines']), \
+    'the build 494 switches are Horizon Zero Dawn\'s only (and quiet-log Elden Ring\'s, below)'
 assert hzd['version'] == 16 and hzd['switches'] == 'avx: false, nvidia: false, wineVCRT: false, fastSync: true, display: "fit"', hzd
 assert not any(line.startswith(('d3d12-wave-ops', 'd3d12-raw-typed-views', 'typed-uav-atomic', 'ignore-volatile-metadata',
                                  'env.FEX_MEMCPYSETTSOENABLED', 'env.FEX_STRICTINPROCESSSPLITLOCKS'))
                for p in presets.values() for line in p['lines']), 'the build 484 experiment is in no list'
 assert not any(line.startswith(('pso-lazy-libs', 'clear-rects'))
-               for p in presets.values() if p is not hzd for line in p['lines']), 'the build 481 switches are Horizon Zero Dawn\'s only'
+               for p in presets.values() if p is not hzd and p is not er for line in p['lines']), \
+    'the build 481 switches are Horizon Zero Dawn\'s only (and pso-lazy-libs Elden Ring\'s, below)'
+# Elden Ring, version 1 (owner's request, 2026-10-15): for an 8 GB iPad Pro M4, offline or through the
+# Seamless Co-op launcher; not device-tested yet. Every line the owner approved, from the memory-bound
+# D3D12 lists: HZD's swap file, a 3 GB video memory budget, the memory left reported as available, HZD's
+# shader-library and refused-shader switches and quiet-log, the stamped orphan-lock mode, the standard
+# list's ec-hook reporter off; 720 lines at 30 FPS, AVX and NVIDIA left as they are.
+assert er['tested'] == ['swap-mb = 6144', 'swap-mode = 2', 'swap-min-mb = 1', 'vram-mb = 3072', 'avail-phys = 1',
+                        'pso-lazy-libs = 1', 'msc-unbounded-retry = 1', 'msc-fail-memo = 1', 'pso-placeholder = 1',
+                        'quiet-log = 1', 'env.MADEIRA_LOCK_ORPHAN = stamped', 'env.MADEIRA_EC_HOOK_TRACE = 0'], er['lines']
+assert not any(line.startswith('clear-rects') for line in er['lines']), 'Elden Ring has no clear-rects'
+assert er['version'] == 1 and er['switches'] == ('wineVCRT: false, fastSync: true, fpsMode: 3, resolution: "1280x720", '
+                                                 'display: "fit"'), er
 assert not any(line.startswith(('skin-check', 'skin-dump', 'fence-strict', 'vis-trace', 'readback-far', 'desc-guard', 'readback-swap',
                                  'static-cbv', 'env.FEX_VECTORTSOENABLED = 1'))
                for p in presets.values() for line in p['lines']), 'the build 482-491 experiments are in no list'
@@ -267,12 +281,14 @@ print('PASS: RDR2 (Steam) is the owner\'s 463 list plus the 466, 467, 470, 472, 
 
 # Recognition: Steam by App ID or steamapps\common folder; everything else by the program's name.
 match = block(lists_src, 'static func match(', '\n    }\n')
-assert 'rdr2AppID = 1174180, gta5EnhancedAppID = 3240220, ghostAppID = 2215430, godOfWarAppID = 1593500,\n               horizonZeroDawnAppID = 1151640' in lists_src
+assert 'rdr2AppID = 1174180, gta5EnhancedAppID = 3240220, ghostAppID = 2215430, godOfWarAppID = 1593500,\n               horizonZeroDawnAppID = 1151640, eldenRingAppID = 1245620' in lists_src
 assert 'let installFolder = last == steamFolder ? steamFolder : nil' in match
 assert 'installFolder == "red dead redemption 2"' in match and 'installFolder == "grand theft auto v enhanced"' in match
 assert 'case "ghostoftsushima.exe":' in match and 'case "gow.exe":' in match and 'case "rdr2.exe", "playrdr2.exe":' in match
 assert 'case "horizonzerodawn.exe":\n            return horizonZeroDawn' in match
 assert 'if steamAppID == horizonZeroDawnAppID || installFolder == "horizon zero dawn" { return horizonZeroDawn }' in match
+assert 'if steamAppID == eldenRingAppID || installFolder == "elden ring" { return eldenRing }' in match
+assert 'case "eldenring.exe", "ersc_launcher.exe":' in match and 'return eldenRing' in match
 # GoT, GoW and Horizon Zero Dawn from Steam: their App IDs, and their folders as for RDR2 and GTA V Enhanced.
 assert 'installFolder == "ghost of tsushima director\'s cut"' in match and 'installFolder == "godofwar"' in match
 assert 'case "playgtav.exe", "gta5_enhanced.exe":' in match and 'return inSteam ? gta5EnhancedSteam : gta5EnhancedOther' in match
@@ -446,9 +462,16 @@ check(id(#"C:\Horizon - Zero Down CE\HorizonZeroDawn.exe"#) == "horizon-zero-daw
 check(id(steam + #"\Horizon Zero Dawn\HorizonZeroDawn.exe"#) == "horizon-zero-dawn", "its program inside Steam")
 check(id(steam + #"\Horizon Zero Dawn"#, 1151640) == "horizon-zero-dawn", "Horizon Zero Dawn from Steam")
 check(id(#"C:\Games\Horizon Zero Dawn Remastered\HorizonZeroDawnRemastered.exe"#) == "none", "the remaster is another game")
+let elden = steam + #"\ELDEN RING"#
+check(id(elden, 1245620) == "elden-ring" && id(elden) == "elden-ring", "Elden Ring by its App ID or Steam folder")
+check(id(elden + #"\Game\eldenring.exe"#) == "elden-ring" && id(elden + #"\Game\ersc_launcher.exe"#) == "elden-ring",
+      "Elden Ring's program and the Seamless Co-op launcher inside Steam")
+check(id(#"C:\Games\Elden Ring\Game\ERSC_LAUNCHER.EXE"#) == "elden-ring" && id(#"C:\ER\eldenring.exe"#) == "elden-ring",
+      "outside Steam, in any case")
+check(id(elden + #"\Game\start_protected_game.exe"#) == "none", "the anti-cheat starter is not the game")
 check(id(#"C:\Games\Foo\foo.exe"#) == "none" && id(steam + #"\Portal 2"#, 620) == "none", "other games")
 check(id("") == "none" && id("C:\\") == "none", "no path")
-print("PASS: Steam games by App ID or steamapps\\common folder, GTA V Enhanced and RDR2 inside and outside Steam, GoT, GoW and Horizon Zero Dawn by their programs, others none")
+print("PASS: Steam games by App ID or steamapps\\common folder, GTA V Enhanced and RDR2 inside and outside Steam, GoT, GoW, Horizon Zero Dawn and Elden Ring (and its Seamless Co-op launcher) by their programs, others none")
 
 // The lists themselves.
 check(Set(R.all.map(\.id)).count == R.all.count, "ids are unique")

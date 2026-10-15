@@ -193,6 +193,10 @@ if m:
     check(re.search(r"^\s*env\.MADEIRA_SRV_FGETPATH = 1$", cfg, re.M) is not None,
           "Horizon Zero Dawn's list sets env.MADEIRA_SRV_FGETPATH = 1")
 others = rec.replace(m.group(0), "") if m else rec
+# Elden Ring's list (2026-10-15, for an 8 GB iPad) takes quiet-log too, not MADEIRA_SRV_FGETPATH.
+er = re.search(r'static let eldenRing = GameRecommendation\(\s*id: "elden-ring".*?config: """(.*?)"""', others, re.S)
+check(bool(er) and re.search(r"^\s*quiet-log = 1$", er.group(1), re.M) is not None, "Elden Ring's list sets quiet-log = 1")
+others = others.replace(er.group(0), "") if er else others
 check("quiet-log" not in re.sub(r"///.*", "", others) and "MADEIRA_SRV_FGETPATH" not in re.sub(r"///.*", "", others),
       "no other game's list sets either switch")
 

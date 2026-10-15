@@ -24,6 +24,8 @@
 //      anywhere else a copy from outside Steam (Rockstar Games Launcher or
 //      another store), and each has its own list. Red Dead Redemption 2's
 //      RDR2.exe and PlayRDR2.exe the same way.
+//    - Elden Ring by eldenring.exe or by the Seamless Co-op mod's
+//      ersc_launcher.exe, which starts it.
 //    - Any other game, and the Desktop, gets the standard list (owner's
 //      decisions, 2026-10-12; GameRecommendationsApply.swift).
 //
@@ -519,6 +521,38 @@ enum GameRecommendations {
         """,
         avx: false, nvidia: false, wineVCRT: false, fastSync: true, display: "fit")
 
+    /// Elden Ring for an 8 GB iPad Pro M4 (owner's request, 2026-10-15), offline or
+    /// with the Seamless Co-op mod, whose ersc_launcher.exe starts eldenring.exe.
+    /// Not device-tested yet: every line is one the owner approved, taken from the
+    /// lists of the other memory-bound Direct3D 12 games. Horizon Zero Dawn's swap
+    /// file (6 GB, broad, from 1 MB), a 3 GB video memory budget (the game's minimum
+    /// GPU has 3 GB) and the memory left before the limit as available, so the game
+    /// picks smaller textures; shader libraries only for pipelines in use (Horizon
+    /// Zero Dawn reached the limit holding them), refused shaders retried, remembered
+    /// and replaced by placeholders instead of failing the game; cheaper logging; the
+    /// stamped orphan-lock mode; and the standard list's ec-hook reporter off. 720
+    /// lines at 30 FPS. AVX is left as it is. Without madeira-bcd's defaults: the
+    /// game never ran with them, and MADEIRA_FREE_DELAY_MS stalled Madeira Dock.
+    static let eldenRing = GameRecommendation(
+        id: "elden-ring", title: "Elden Ring", version: 1,
+        config: """
+        # Madeira's recommended settings for Elden Ring (an 8 GB iPad; not device-tested yet).
+        # Reset to Recommended, at the bottom of the game's settings, brings them back.
+        swap-mb = 6144
+        swap-mode = 2
+        swap-min-mb = 1
+        vram-mb = 3072
+        avail-phys = 1
+        pso-lazy-libs = 1
+        msc-unbounded-retry = 1
+        msc-fail-memo = 1
+        pso-placeholder = 1
+        quiet-log = 1
+        env.MADEIRA_LOCK_ORPHAN = stamped
+        env.MADEIRA_EC_HOOK_TRACE = 0
+        """,
+        wineVCRT: false, fastSync: true, fpsMode: 3, resolution: "1280x720", display: "fit")
+
     /// Every other game, and the Desktop (owner's decisions, 2026-10-12): most games
     /// the owner tried outside these lists closed at start until the [ec-hook]
     /// reporter was off. It reads code a game's protection rewrites at run time
@@ -538,13 +572,13 @@ enum GameRecommendations {
         """)
 
     static let all = [rdr2Steam, rdr2Other, gta5EnhancedSteam, gta5EnhancedOther, ghostOfTsushima, godOfWar, horizonZeroDawn,
-                      standard]
+                      eldenRing, standard]
 
     // MARK: Recognising a game
 
     /// Steam App IDs.
     static let rdr2AppID = 1174180, gta5EnhancedAppID = 3240220, ghostAppID = 2215430, godOfWarAppID = 1593500,
-               horizonZeroDawnAppID = 1151640
+               horizonZeroDawnAppID = 1151640, eldenRingAppID = 1245620
 
     /// The recommendation for a game, or nil.
     /// - windowsPath: a program ("C:\Games\GoW\GoW.exe"), or a library Steam
@@ -566,6 +600,7 @@ enum GameRecommendations {
                 || installFolder == "ghost of tsushima" { return ghostOfTsushima }
             if steamAppID == godOfWarAppID || installFolder == "godofwar" || installFolder == "god of war" { return godOfWar }
             if steamAppID == horizonZeroDawnAppID || installFolder == "horizon zero dawn" { return horizonZeroDawn }
+            if steamAppID == eldenRingAppID || installFolder == "elden ring" { return eldenRing }
             return nil
         }
         // A program, wherever it was installed: only the game's own programs, so a
@@ -586,6 +621,9 @@ enum GameRecommendations {
             return godOfWar
         case "horizonzerodawn.exe":
             return horizonZeroDawn
+        case "eldenring.exe", "ersc_launcher.exe":
+            // The game, or the Seamless Co-op mod's launcher beside it, which starts it.
+            return eldenRing
         default:
             return nil
         }
