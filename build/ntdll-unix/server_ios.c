@@ -2451,6 +2451,15 @@ static void ios_power_probe_tick( const char *wall, uint64_t now_ns, double dt_m
     ios_pp.ms = ios_pp.cpu_mj = ios_pp.cpu_p_mj = ios_pp.billed_mj = ios_pp.serviced_mj = 0;
 }
 
+/* ri_page_wait_time_mach is in the iOS 27 SDK's rusage_info_v6 (the development
+ * machine's) but not in iOS 26.5's (the CI runner's); there pgw reads 0. */
+#include <Availability.h>
+#if __IPHONE_OS_VERSION_MAX_ALLOWED >= 270000
+#define XP_PAGE_WAIT(r) ((r).ri_page_wait_time_mach)
+#else
+#define XP_PAGE_WAIT(r) 0
+#endif
+
 static void ios_xprobe_main( void )
 {
     static struct ios_xp_row rows[1024];
@@ -2579,7 +2588,7 @@ static void ios_xprobe_main( void )
             n = snprintf( line, sizeof(line),
                           "[xp] %s +%.2f dt=%.0f cpu=%.0f (thr %.0f) P=%.0f E=%.0f run=%.0f pgw=%.1f GHz P=%.2f E=%.2f Minst=%.0f IPC=%.2f mJ=%.0f pin=%llu rdKB=%llu fpMB=%llu",
                           wall, XP_MS( now - t_start ) / 1000.0, dt_ms, cpu, sum_thr_ms, pms, ems,
-                          XP_MS( ru.ri_runnable_time - pru.ri_runnable_time ), XP_MS( ru.ri_page_wait_time_mach - pru.ri_page_wait_time_mach ),
+                          XP_MS( ru.ri_runnable_time - pru.ri_runnable_time ), XP_MS( XP_PAGE_WAIT( ru ) - XP_PAGE_WAIT( pru ) ),
                           pms > 0 ? pcy / (pms * 1e6) : 0, ems > 0 ? (cy - pcy) / (ems * 1e6) : 0, ins / 1e6, cy > 0 ? ins / cy : 0,
                           (double)(ru.ri_energy_nj - pru.ri_energy_nj) / 1e6,
                           (unsigned long long)(ru.ri_pageins - pru.ri_pageins), (unsigned long long)((ru.ri_diskio_bytesread - pru.ri_diskio_bytesread) >> 10),
