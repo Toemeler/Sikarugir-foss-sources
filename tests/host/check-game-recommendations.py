@@ -65,18 +65,19 @@ for m in re.finditer(r'static let (\w+) = GameRecommendation\(\n\s*id: "([^"]+)"
     lines = [line[len(indent):] if line.startswith(indent) else line for line in body.split('\n')]
     presets[ident] = dict(name=name, title=title, version=int(version), lines=lines, switches=' '.join((switches or '').split()))
 assert set(presets) == {'rdr2-steam', 'rdr2-other', 'gta5e-steam', 'gta5e-other', 'ghost-of-tsushima', 'god-of-war',
-                        'horizon-zero-dawn', 'elden-ring', 'raft', 'standard'}, sorted(presets)
+                        'horizon-zero-dawn', 'elden-ring', 'raft', 'little-nightmares-ee', 'standard'}, sorted(presets)
 assert ('static let all = [rdr2Steam, rdr2Other, gta5EnhancedSteam, gta5EnhancedOther, ghostOfTsushima, godOfWar, horizonZeroDawn,\n'
-        '                      eldenRing, raft, standard]') in lists_src
+        '                      eldenRing, raft, littleNightmaresEE, standard]') in lists_src
 
 # madeira-bcd's defaults where upstream's differ: every game madeira-bcd ran had them,
 # so every game's own list ends with them. The standard list reaches every other game
-# and the Desktop, and has none of them; nor have Elden Ring's and Raft's, which madeira-bcd never ran.
+# and the Desktop, and has none of them; nor have Elden Ring's, Raft's and Little Nightmares Enhanced
+# Edition's, which madeira-bcd never ran.
 FORK_DEFAULTS = ["# madeira-bcd's defaults, which this list was tested with (upstream's differ).",
                  'env.MADEIRA_FREE_DELAY_MS = 2000', 'env.MADEIRA_CTX_CPU_AREA = 2', 'env.MADEIRA_WAIT_CHILDREN = 1',
                  'env.MADEIRA_JIT_DUMP = 0']
 for ident, p in presets.items():
-    if ident in ('standard', 'elden-ring', 'raft'):
+    if ident in ('standard', 'elden-ring', 'raft', 'little-nightmares-ee'):
         assert not set(FORK_DEFAULTS) & set(p['lines']), (ident, "this list has none of madeira-bcd's defaults")
         p['tested'], p['fork'] = p['lines'][2:], []
         continue
@@ -105,7 +106,7 @@ for ident, p in presets.items():
         if key != 'env.WINEDLLOVERRIDES':
             named = named.replace('socialclubhelper.exe', '')
         assert 'socialclub' not in named and 'MADEIRA_DLL_LOCAL' not in line, (ident, line)
-print('PASS: ten lists, two comment lines each, every game list but Elden Ring\'s and Raft\'s ends with the four fork defaults and the standard one has none, no key twice, '
+print('PASS: eleven lists, two comment lines each, every game list but Elden Ring\'s, Raft\'s and Little Nightmares EE\'s ends with the four fork defaults and the standard one has none, no key twice, '
       'every non-env key in the settings catalog, no Social Club DLL lines, no variant DLL switches')
 
 # Red Dead Redemption 2 from Steam: the owner's list of 2026-10-09 (build 463), line for line,
@@ -270,6 +271,12 @@ assert raft['tested'] == ['swap-mb = 4096', 'swap-mode = 2', 'swap-min-mb = 1', 
                           'env.MADEIRA_LOCK_ORPHAN = stamped', 'env.MADEIRA_EC_HOOK_TRACE = 0'], raft['lines']
 assert raft['version'] == 1 and raft['switches'] == ('wineVCRT: false, fastSync: true, fpsMode: 3, '
                                                      'resolution: GameRecommendation.screen720, display: "fit"'), raft
+# Little Nightmares Enhanced Edition, version 1 (owner's request, 2026-10-15, recommended values without a
+# review): Unreal on DXMT for an 8 GB iPad Pro M4; not device-tested yet. Raft's list with a 6 GB swap file.
+lne = presets['little-nightmares-ee']
+assert lne['tested'] == ['swap-mb = 6144', 'swap-mode = 2', 'swap-min-mb = 1', 'vram-mb = 2048', 'avail-phys = 1',
+                         'env.MADEIRA_LOCK_ORPHAN = stamped', 'env.MADEIRA_EC_HOOK_TRACE = 0'], lne['lines']
+assert lne['version'] == 1 and lne['switches'] == raft['switches'], lne
 assert not any(line.startswith(('skin-check', 'skin-dump', 'fence-strict', 'vis-trace', 'readback-far', 'desc-guard', 'readback-swap',
                                  'static-cbv', 'env.FEX_VECTORTSOENABLED = 1'))
                for p in presets.values() for line in p['lines']), 'the build 482-491 experiments are in no list'
@@ -289,7 +296,7 @@ print('PASS: RDR2 (Steam) is the owner\'s 463 list plus the 466, 467, 470, 472, 
 
 # Recognition: Steam by App ID or steamapps\common folder; everything else by the program's name.
 match = block(lists_src, 'static func match(', '\n    }\n')
-assert 'rdr2AppID = 1174180, gta5EnhancedAppID = 3240220, ghostAppID = 2215430, godOfWarAppID = 1593500,\n               horizonZeroDawnAppID = 1151640, eldenRingAppID = 1245620,\n               raftAppID = 648800' in lists_src
+assert 'rdr2AppID = 1174180, gta5EnhancedAppID = 3240220, ghostAppID = 2215430, godOfWarAppID = 1593500,\n               horizonZeroDawnAppID = 1151640, eldenRingAppID = 1245620,\n               raftAppID = 648800, littleNightmaresEEAppID = 2149010' in lists_src
 assert 'let installFolder = last == steamFolder ? steamFolder : nil' in match
 assert 'installFolder == "red dead redemption 2"' in match and 'installFolder == "grand theft auto v enhanced"' in match
 assert 'case "ghostoftsushima.exe":' in match and 'case "gow.exe":' in match and 'case "rdr2.exe", "playrdr2.exe":' in match
@@ -299,6 +306,9 @@ assert 'if steamAppID == eldenRingAppID || installFolder == "elden ring" { retur
 assert 'case "eldenring.exe", "ersc_launcher.exe":' in match and 'return eldenRing' in match
 assert 'if steamAppID == raftAppID || installFolder == "raft" { return raft }' in match
 assert 'case "raft.exe":\n            return raft' in match
+# Little Nightmares Enhanced Edition by its App ID only: its program's name is not known yet.
+assert 'if steamAppID == littleNightmaresEEAppID { return littleNightmaresEE }' in match
+assert 'littlenightmares' not in match.lower().replace('littlenightmaresee', ''), 'no folder or program name for it yet'
 # GoT, GoW and Horizon Zero Dawn from Steam: their App IDs, and their folders as for RDR2 and GTA V Enhanced.
 assert 'installFolder == "ghost of tsushima director\'s cut"' in match and 'installFolder == "godofwar"' in match
 assert 'case "playgtav.exe", "gta5_enhanced.exe":' in match and 'return inSteam ? gta5EnhancedSteam : gta5EnhancedOther' in match
@@ -482,9 +492,12 @@ check(id(elden + #"\Game\start_protected_game.exe"#) == "none", "the anti-cheat 
 check(id(steam + #"\Raft"#, 648800) == "raft" && id(steam + #"\Raft"#) == "raft", "Raft by its App ID or Steam folder")
 check(id(steam + #"\Raft\Raft.exe"#) == "raft" && id(#"D:\Games\raft\RAFT.EXE"#) == "raft", "Raft's program anywhere, in any case")
 check(id(steam + #"\Raft\UnityCrashHandler64.exe"#) == "none", "not Unity's crash handler")
+check(id(steam + #"\Little Nightmares Enhanced Edition"#, 2149010) == "little-nightmares-ee", "Little Nightmares EE by its App ID")
+check(id(steam + #"\Little Nightmares"#, 424840) == "none" && id(#"C:\LN\Atlas\Binaries\Win64\LittleNightmares.exe"#) == "none",
+      "the original game has no list")
 check(id(#"C:\Games\Foo\foo.exe"#) == "none" && id(steam + #"\Portal 2"#, 620) == "none", "other games")
 check(id("") == "none" && id("C:\\") == "none", "no path")
-print("PASS: Steam games by App ID or steamapps\\common folder, GTA V Enhanced and RDR2 inside and outside Steam, GoT, GoW, Horizon Zero Dawn, Elden Ring (and its Seamless Co-op launcher) and Raft by their programs, others none")
+print("PASS: Steam games by App ID or steamapps\\common folder, GTA V Enhanced and RDR2 inside and outside Steam, GoT, GoW, Horizon Zero Dawn, Elden Ring (and its Seamless Co-op launcher) and Raft by their programs, Little Nightmares EE by its App ID, others none")
 
 // The lists themselves.
 check(Set(R.all.map(\.id)).count == R.all.count, "ids are unique")

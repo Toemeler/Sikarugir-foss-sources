@@ -25,7 +25,9 @@
 //      another store), and each has its own list. Red Dead Redemption 2's
 //      RDR2.exe and PlayRDR2.exe the same way.
 //    - Elden Ring by eldenring.exe or by the Seamless Co-op mod's
-//      ersc_launcher.exe, which starts it; Raft by Raft.exe.
+//      ersc_launcher.exe, which starts it; Raft by Raft.exe. Little
+//      Nightmares Enhanced Edition only by its Steam App ID (its program
+//      name is not known yet, and the original game's is LittleNightmares.exe).
 //    - Any other game, and the Desktop, gets the standard list (owner's
 //      decisions, 2026-10-12; GameRecommendationsApply.swift).
 //
@@ -576,6 +578,30 @@ enum GameRecommendations {
         """,
         wineVCRT: false, fastSync: true, fpsMode: 3, resolution: GameRecommendation.screen720, display: "fit")
 
+    /// Little Nightmares Enhanced Edition (Steam 2149010, October 2025; Unreal
+    /// Engine, Direct3D 11 through DXMT) for an 8 GB iPad Pro M4 (owner's request,
+    /// 2026-10-15). Not device-tested yet; the owner asked for the recommended
+    /// values without a review, to change later. The game asks for 6 GB of RAM
+    /// (8 recommended) and a 2 GB GPU: a 6 GB swap file (broad, from 1 MB), a 2 GB
+    /// video memory budget and the memory left before the limit as available; the
+    /// stamped orphan-lock mode; the standard list's ec-hook reporter off. This
+    /// screen's shape at 720 lines, 30 FPS. Without madeira-bcd's defaults, as for
+    /// Elden Ring and Raft.
+    static let littleNightmaresEE = GameRecommendation(
+        id: "little-nightmares-ee", title: "Little Nightmares Enhanced Edition", version: 1,
+        config: """
+        # Madeira's recommended settings for Little Nightmares Enhanced Edition (an 8 GB iPad; not device-tested yet).
+        # Reset to Recommended, at the bottom of the game's settings, brings them back.
+        swap-mb = 6144
+        swap-mode = 2
+        swap-min-mb = 1
+        vram-mb = 2048
+        avail-phys = 1
+        env.MADEIRA_LOCK_ORPHAN = stamped
+        env.MADEIRA_EC_HOOK_TRACE = 0
+        """,
+        wineVCRT: false, fastSync: true, fpsMode: 3, resolution: GameRecommendation.screen720, display: "fit")
+
     /// Every other game, and the Desktop (owner's decisions, 2026-10-12): most games
     /// the owner tried outside these lists closed at start until the [ec-hook]
     /// reporter was off. It reads code a game's protection rewrites at run time
@@ -595,14 +621,14 @@ enum GameRecommendations {
         """)
 
     static let all = [rdr2Steam, rdr2Other, gta5EnhancedSteam, gta5EnhancedOther, ghostOfTsushima, godOfWar, horizonZeroDawn,
-                      eldenRing, raft, standard]
+                      eldenRing, raft, littleNightmaresEE, standard]
 
     // MARK: Recognising a game
 
     /// Steam App IDs.
     static let rdr2AppID = 1174180, gta5EnhancedAppID = 3240220, ghostAppID = 2215430, godOfWarAppID = 1593500,
                horizonZeroDawnAppID = 1151640, eldenRingAppID = 1245620,
-               raftAppID = 648800
+               raftAppID = 648800, littleNightmaresEEAppID = 2149010
 
     /// The recommendation for a game, or nil.
     /// - windowsPath: a program ("C:\Games\GoW\GoW.exe"), or a library Steam
@@ -626,6 +652,7 @@ enum GameRecommendations {
             if steamAppID == horizonZeroDawnAppID || installFolder == "horizon zero dawn" { return horizonZeroDawn }
             if steamAppID == eldenRingAppID || installFolder == "elden ring" { return eldenRing }
             if steamAppID == raftAppID || installFolder == "raft" { return raft }
+            if steamAppID == littleNightmaresEEAppID { return littleNightmaresEE }
             return nil
         }
         // A program, wherever it was installed: only the game's own programs, so a
