@@ -12,14 +12,11 @@ SHIMS_DIR="$REPO_ROOT/build/ntdll-unix/shims"
 OBJ_DIR="$BUILD_DIR/obj"
 mkdir -p "$OBJ_DIR"
 
-# Copy the base library if we don't have one yet
-if [ ! -f "$OBJ_DIR/libwineserver.a" ]; then
-    if [ -f "$APP_LIB" ]; then
-        cp "$APP_LIB" "$OBJ_DIR/libwineserver.a"
-    else
-        echo "ERROR: No base libwineserver.a found"
-        exit 1
-    fi
+# Copy the base library if we don't have one yet. Without one (a clean
+# checkout, e.g. CI) it is built from source further down, once the list of
+# objects the patched files replace is known.
+if [ ! -f "$OBJ_DIR/libwineserver.a" ] && [ -f "$APP_LIB" ]; then
+    cp "$APP_LIB" "$OBJ_DIR/libwineserver.a"
 fi
 
 CC_FLAGS=(
@@ -191,6 +188,31 @@ REPLACEMENTS=(
     "hidparse_ios.o:hidparse_ios.o" # ml2101
     "storage_device_ios.o:storage_device_ios.o"
 )
+
+# No base archive: compile every wine/server/*.c that no entry above replaces
+# (wine_log_ios.o and wineserver_ios_kill.o come from REPLACEMENTS too).
+if [ ! -f "$OBJ_DIR/libwineserver.a" ]; then
+    echo "=== No base libwineserver.a: building it from wine/server ==="
+    BASE_DIR="$OBJ_DIR/base"
+    rm -rf "$BASE_DIR" && mkdir -p "$BASE_DIR"
+    for src in "$WINE_SRC"/server/*.c; do
+        name=$(basename "$src" .c)
+        replaced=0
+        for entry in "${REPLACEMENTS[@]}"; do
+            [ "${entry##*:}" = "$name.o" ] && replaced=1 && break
+        done
+        [ $replaced = 1 ] && continue
+        echo -n "  $name... "
+        if xcrun -sdk iphoneos clang "${CC_FLAGS[@]}" -c "$src" -o "$BASE_DIR/$name.o" 2>"$OBJ_DIR/err-base-$name.txt"; then
+            echo "OK"
+        else
+            echo "FAILED (see $OBJ_DIR/err-base-$name.txt)"
+            grep -m 20 -B 2 -A 3 'error:' "$OBJ_DIR/err-base-$name.txt" || head -40 "$OBJ_DIR/err-base-$name.txt"
+            exit 1
+        fi
+    done
+    ar rcs "$OBJ_DIR/libwineserver.a" "$BASE_DIR"/*.o
+fi
 
 for entry in "${REPLACEMENTS[@]}"; do
     new_obj="${entry%%:*}"
