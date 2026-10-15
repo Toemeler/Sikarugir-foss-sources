@@ -196,6 +196,24 @@ echo "=== winemetal unix (Objective-C) ==="
 compile_objc "$DXMT_SRC/winemetal/unix/winemetal_unix.c" winemetal_unix
 compile_objc "$DXMT_SRC/winemetal/unix/cache.c"          cache
 
+echo "=== airconv shader headers ==="
+# airconv_context.cpp links three helper shaders into every converted shader,
+# embedded as AIR bitcode arrays (air_msad.h etc.). DXMT's meson build makes
+# them with the metalir + hexdump generators (src/airconv/meson.build); the
+# same chain here, with the -std/--target it passes.
+mkdir -p "$BUILD_DIR/shader-headers"
+for shader in air_msad air_samplepos air_tessellation; do
+    printf "  %-40s " "$shader.h"
+    if (cd "$BUILD_DIR/shader-headers" \
+        && xcrun -sdk macosx metal -std=metal3.1 --target=air64-apple-macos14.0 \
+             -o "$shader.air" -c "$DXMT_SRC/airconv/shaders/$shader.metal" \
+        && xxd -n "$shader" -i "$shader.air" "$shader.h") 2>"$OBJ_DIR/$shader.err"; then
+        echo "OK"
+    else
+        echo "FAILED"; FAILED=$((FAILED+1)); FAILED_FILES="$FAILED_FILES $shader"
+    fi
+done
+
 echo "=== airconv (C++ 20, needs LLVM headers) ==="
 for cpp in airconv_context.cpp air_type.cpp air_signature.cpp air_operations.cpp \
            dxbc_converter.cpp dxbc_converter_gs.cpp dxbc_converter_ts.cpp \
@@ -321,6 +339,11 @@ echo ""
 echo "Results: $SUCCEEDED succeeded, $FAILED failed"
 if [ -n "$FAILED_FILES" ]; then
     echo "Failed:$FAILED_FILES"
+    # The first errors of each, so a CI log says why.
+    for name in $FAILED_FILES; do
+        echo "--- $name.err ---"
+        grep -m 20 -B 2 -A 3 'error:' "$OBJ_DIR/$name.err" || head -40 "$OBJ_DIR/$name.err"
+    done
     echo "See .err files in $OBJ_DIR/"
     exit 1
 fi
