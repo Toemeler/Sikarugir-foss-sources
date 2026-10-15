@@ -1,0 +1,510 @@
+# Builds Madeira into a sideloadable (unsigned) IPA and publishes it as a
+# GitHub Release, together with a SideStore/AltStore source feed so the build
+# can be installed and updated from inside the sideloader.
+#
+# Pushing to the default branch releases as build-N; pushing a v* tag releases
+# under that tag.
+#
+# Three jobs: LLVM for iOS (hours, so built once and cached), the app (every
+# native library docs/BUILDING.md lists, then Xcode), and the Pages site. The
+# Windows-side DLLs are committed in app/Madeira/*-windows and are not rebuilt.
+
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      force_build:
+        description: "Rebuild even when the app did not change"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  # Read-only, purely to ask whether Pages is serving; see the feed step.
+  pages: read
+
+env:
+  # Generated files follow the ref being built; a tag build writes to the
+  # default branch, since a tag is not a place to commit to.
+  TARGET_BRANCH: >-
+    ${{ github.ref_type == 'tag'
+        && github.event.repository.default_branch
+        || github.ref_name }}
+  MINGW: llvm-mingw-20260421-ucrt-macos-universal
+  MINGW_SHA256: bd85a3975723815cef28dbbd2ca2cb0c926f6b348a12a0453f39f7af273cb3f7
+
+concurrency:
+  # A newer build supersedes whatever is still running on the same ref, since
+  # those race to commit the feed to one branch. The ref is used fully
+  # qualified so a branch and a tag of the same name stay apart.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  public:
+    name: Repository is public
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Stop while the repository is private
+        run: |
+          # macOS minutes are free only for public repositories, and a private
+          # repository's raw URLs and releases are not reachable by SideStore.
+          if [ "${{ github.event.repository.private }}" = "true" ]; then
+            echo "::error::This repository is private. Make it public (Settings -> General -> Danger Zone -> Change visibility), then run the workflow again."
+            exit 1
+          fi
+          echo "public: building"
+
+  llvm:
+    name: LLVM for iOS
+    needs: public
+    runs-on: macos-26
+    timeout-minutes: 300
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cached?
+        id: cache
+        uses: actions/cache@v4
+        with:
+          # Bump v1 to rebuild LLVM; the key also changes with its script.
+          key: llvm-15.0.7-ios-v1-${{ hashFiles('.github/scripts/build_llvm_ios.sh') }}
+          path: |
+            toolchains/llvm-project/llvm/include
+            toolchains/llvm-ios-build/include
+            toolchains/llvm-ios-build/lib
+
+      - name: Build LLVM 15.0.7 for iOS
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          command -v ninja >/dev/null || brew install ninja
+          .github/scripts/build_llvm_ios.sh
+
+  build:
+    name: Build and release
+    needs: [public, llvm]
+    runs-on: macos-26
+    timeout-minutes: 180
+    outputs:
+      published: ${{ steps.appcheck.outputs.skip != 'true' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: |
+          set -euo pipefail
+          # Newest Xcode on the image, so the app is built against the newest
+          # iOS SDK the runner has.
+          NEWEST=$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | tail -1 || true)
+          if [ -n "$NEWEST" ]; then sudo xcode-select -s "$NEWEST"; fi
+          sw_vers
+          xcodebuild -version
+          SDK=$(xcrun --sdk iphoneos --show-sdk-version)
+          TARGET=$(sed -n 's/.*IPHONEOS_DEPLOYMENT_TARGET = \([0-9.]*\);.*/\1/p' \
+            app/Madeira.xcodeproj/project.pbxproj | sort -V | tail -1)
+          echo "iOS SDK: $SDK, deployment target: $TARGET"
+          # A deployment target above the installed SDK fails deep inside the
+          # build with an opaque message; say what is actually wrong here.
+          if [ "$(printf '%s\n%s\n' "$TARGET" "$SDK" | sort -V | head -1)" != "$TARGET" ]; then
+            echo "::error::Deployment target $TARGET is newer than the installed iOS SDK $SDK."
+            exit 1
+          fi
+          echo "MIN_OS=$TARGET" >> "$GITHUB_ENV"
+
+      - name: Has the app changed since the last release?
+        id: appcheck
+        run: |
+          set -euo pipefail
+          # Only what ends up inside the IPA: the app, the build scripts, the
+          # pinned submodule commits and this workflow's own scripts. A README
+          # or feed edit deliberately does not force a rebuild.
+          STAMP=$( {
+            for p in app build madeira-d3d12 FEX wine dxmt madeira-dock; do
+              git rev-parse "HEAD:$p"
+            done
+            git rev-parse HEAD:.github/scripts HEAD:.github/workflows
+          } | shasum -a 256 | cut -d' ' -f1 )
+          echo "stamp=$STAMP" >> "$GITHUB_OUTPUT"
+
+          if [ "${{ github.ref_type }}" = "tag" ] || [ "${{ inputs.force_build }}" = "true" ]; then
+            echo "Building: tag push or forced."
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          elif [ -f .build-stamp ] && [ "$(cat .build-stamp)" = "$STAMP" ]; then
+            echo "App unchanged since the last release; nothing to build."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "App changed; building."
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Submodules
+        if: steps.appcheck.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          # Only fetched once a build is certain: wine alone is large.
+          git submodule update --init --recursive --depth 1 --jobs 4
+          git submodule status
+
+      - name: Stamp version
+        if: steps.appcheck.outputs.skip != 'true'
+        id: version
+        run: |
+          set -euo pipefail
+          PBX=app/Madeira.xcodeproj/project.pbxproj
+          BASE=$(sed -n 's/.*MARKETING_VERSION = \([0-9.]*\);.*/\1/p' "$PBX" | head -1)
+          BUNDLE_ID=$(sed -n 's/.*MADEIRA_BUNDLE_IDENTIFIER = \([^;]*\);.*/\1/p' "$PBX" | head -1)
+          # Monotonic last component so SideStore can tell builds apart and
+          # offer updates. Passed to xcodebuild; the project is left untouched.
+          VERSION="${BASE}.${{ github.run_number }}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "bundle_id=$BUNDLE_ID" >> "$GITHUB_OUTPUT"
+          echo "Building version $VERSION ($BUNDLE_ID)"
+
+      - name: Host tools
+        if: steps.appcheck.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          # bison/flex for Wine's configure (macOS ships bison 2.3), gnutls and
+          # freetype so that configure enables the modules that use them,
+          # sevenzip for the Visual C++ redistributable.
+          brew install bison flex gnutls freetype pkgconf sevenzip
+          command -v rustup >/dev/null || {
+            curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+            export PATH="$HOME/.cargo/bin:$PATH"
+          }
+          rustup target add aarch64-apple-ios
+          # Xcode 26 ships the Metal compiler as a separate component.
+          xcrun -sdk macosx metal --version >/dev/null 2>&1 || xcodebuild -downloadComponent MetalToolchain
+          xcrun -sdk macosx metal --version
+
+          mkdir -p toolchains
+          curl -fsSL --retry 3 -o "toolchains/$MINGW.tar.xz" \
+            "https://github.com/mstorsjo/llvm-mingw/releases/download/20260421/$MINGW.tar.xz"
+          echo "$MINGW_SHA256  toolchains/$MINGW.tar.xz" | shasum -a 256 -c -
+          tar -xJf "toolchains/$MINGW.tar.xz" -C toolchains
+          rm "toolchains/$MINGW.tar.xz"
+
+          # build/freetype-ios/build.sh and the win32u/dwrite unix sides read it here.
+          git clone -q --depth 1 --branch VER-2-13-3 https://github.com/freetype/freetype.git research/freetype
+
+      - name: LLVM for iOS (from the cache)
+        if: steps.appcheck.outputs.skip != 'true'
+        uses: actions/cache/restore@v4
+        with:
+          key: llvm-15.0.7-ios-v1-${{ hashFiles('.github/scripts/build_llvm_ios.sh') }}
+          fail-on-cache-miss: true
+          path: |
+            toolchains/llvm-project/llvm/include
+            toolchains/llvm-ios-build/include
+            toolchains/llvm-ios-build/lib
+
+      - name: Licence copies
+        if: steps.appcheck.outputs.skip != 'true'
+        run: build/stage-licenses.sh
+
+      - name: GMP, Nettle, GnuTLS
+        if: steps.appcheck.outputs.skip != 'true'
+        run: build/gnutls-ios/build.sh
+
+      - name: FFmpeg
+        if: steps.appcheck.outputs.skip != 'true'
+        run: build/ffmpeg/build.sh
+
+      - name: FreeType
+        if: steps.appcheck.outputs.skip != 'true'
+        run: build/freetype-ios/build.sh
+
+      - name: FEX
+        if: steps.appcheck.outputs.skip != 'true'
+        run: build/fex-ios/build.sh
+
+      - name: Wine (configure)
+        if: steps.appcheck.outputs.skip != 'true'
+        run: .github/scripts/configure_wine.sh
+
+      - name: Wine (unix side)
+        if: steps.appcheck.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          build/ntdll-unix/build.sh
+          # wineserver's build wants llvm-objcopy; llvm-mingw carries one. Appended,
+          # so it never shadows the Xcode tools.
+          PATH="$PATH:$PWD/toolchains/$MINGW/bin" build/wineserver/build.sh
+          build/win32u-unix/build.sh
+          ls -l app/Madeira/libntdll_unix.a app/Madeira/libwineserver.a app/Madeira/libwin32u_unix.a
+
+      - name: DXMT
+        if: steps.appcheck.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          build/dxmt-ios/build.sh
+          # The archive the app links: DXMT's objects plus the LLVM libraries
+          # (build/dxmt-ios/README.md).
+          xcrun -sdk iphoneos libtool -static -o build/dxmt-ios/libdxmt_combined.a \
+            build/dxmt-ios/obj/*.o toolchains/llvm-ios-build/lib/*.a
+          cp build/dxmt-ios/libdxmt_combined.a app/Madeira/libdxmt_combined.a
+          ls -lh app/Madeira/libdxmt_combined.a
+
+      - name: In-app pairing
+        if: steps.appcheck.outputs.skip != 'true'
+        run: build/rppairing-ios/build.sh
+
+      - name: Madeira Dock
+        if: steps.appcheck.outputs.skip != 'true'
+        run: build/madeira-dock/build.sh
+
+      - name: Visual C++ runtime
+        if: steps.appcheck.outputs.skip != 'true'
+        # Best effort; the app builds without them (the folder is created first).
+        continue-on-error: true
+        run: |
+          mkdir -p app/Madeira/x86_64-vcruntime
+          .github/scripts/fetch_vcruntime.sh
+
+      - name: Build
+        if: steps.appcheck.outputs.skip != 'true'
+        run: |
+          set -o pipefail
+          mkdir -p app/Madeira/x86_64-vcruntime
+          .github/scripts/build_app.sh "${{ steps.version.outputs.version }}" "${{ github.run_number }}" 2>&1 | tee build.log
+
+      - name: Package the IPA
+        if: steps.appcheck.outputs.skip != 'true'
+        id: package
+        run: |
+          set -euo pipefail
+          .github/scripts/package_ipa.sh build/xcode/Debug-iphoneos/Madeira.app \
+            app/Madeira/Madeira.entitlements Madeira.ipa
+          echo "size=$(stat -f%z Madeira.ipa)" >> "$GITHUB_OUTPUT"
+          echo "sha256=$(shasum -a 256 Madeira.ipa | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "human_size=$(ls -lh Madeira.ipa | awk '{print $5}')" >> "$GITHUB_OUTPUT"
+
+      - name: Determine release tag
+        if: steps.appcheck.outputs.skip != 'true'
+        id: tag
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+            echo "title=Madeira ${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=build-${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+            echo "title=Madeira build #${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload IPA as run artifact (non-fatal, short retention)
+        if: steps.appcheck.outputs.skip != 'true'
+        # The account-wide artifact quota must never kill a finished build - the
+        # GitHub Release below is the real distribution channel.
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: Madeira-ipa
+          path: Madeira.ipa
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Build the SideStore source feed
+        if: steps.appcheck.outputs.skip != 'true'
+        id: feed
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          BUNDLE_ID: ${{ steps.version.outputs.bundle_id }}
+          SIZE: ${{ steps.package.outputs.size }}
+          SHA256: ${{ steps.package.outputs.sha256 }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # The one-tap "Add to SideStore" button needs the Pages landing page.
+          # It must not be advertised before Pages actually serves, so ask - and
+          # on any doubt fall back to raw.githubusercontent.com, which needs
+          # nothing switched on.
+          PAGES_URL=$(gh api "repos/${{ github.repository }}/pages" --jq '.html_url' 2>/dev/null || true)
+          # With Pages off, gh prints its 404 body to stdout and that lands in
+          # PAGES_URL. Anything that is not a URL means "no Pages".
+          case "$PAGES_URL" in
+            http://*|https://*) ;;
+            *) PAGES_URL="" ;;
+          esac
+          export PAGES_URL
+          echo "Pages: ${PAGES_URL:-not enabled}"
+          sips -Z 512 app/Madeira/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png --out icon.png
+          python3 .github/scripts/make_source.py .
+
+      - name: Publish the release
+        if: steps.appcheck.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          TITLE: ${{ steps.tag.outputs.title }}
+          VERSION: ${{ steps.version.outputs.version }}
+          IPA_SIZE: ${{ steps.package.outputs.human_size }}
+          SHA256: ${{ steps.package.outputs.sha256 }}
+          SOURCE_URL: ${{ steps.feed.outputs.source_url }}
+          PAGES_URL: ${{ steps.feed.outputs.pages_url }}
+        run: |
+          set -euo pipefail
+          # GitHub strips sidestore:// links from release bodies, so the one-tap
+          # button only exists once Pages is serving the landing page.
+          if [ -n "${PAGES_URL:-}" ]; then
+            ADD_SOURCE="**[Add to SideStore](${PAGES_URL%/}/)**"
+          else
+            ADD_SOURCE="Add this source in SideStore: \`$SOURCE_URL\`"
+          fi
+          UPSTREAM=$(git log -1 --format='%h %s' HEAD)
+
+          {
+            printf '## Madeira %s\n\n' "$VERSION"
+            printf 'Windows PC games on iPhone and iPad, built from `%s`.\n\n' "$UPSTREAM"
+            printf '### Install\n\n'
+            printf '%s\n\n' "$ADD_SOURCE"
+            printf 'Or download `Madeira.ipa` and install it with SideStore, AltStore or Sideloadly.\n'
+            printf 'Then enable JIT in Madeira (Settings -> JIT; on iOS 27 it can pair the device itself).\n\n'
+            printf '### Build\n\n'
+            printf -- '- Debug configuration (the one that runs games)\n'
+            printf -- '- IPA: %s · SHA-256 `%s`\n' "$IPA_SIZE" "$SHA256"
+            printf -- '- Unsigned; sideloaders re-sign on install.\n'
+          } > notes.md
+          cat notes.md
+
+          if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release upload "$TAG" Madeira.ipa --repo "${{ github.repository }}" --clobber
+            gh release edit "$TAG" --repo "${{ github.repository }}" \
+              --title "$TITLE" --notes-file notes.md
+          else
+            gh release create "$TAG" Madeira.ipa --repo "${{ github.repository }}" \
+              --title "$TITLE" --notes-file notes.md
+          fi
+
+      - name: Commit the source feed
+        if: steps.appcheck.outputs.skip != 'true'
+        # Committed rather than deployed with actions/deploy-pages: the Actions
+        # token may not create the Pages site itself. This makes the feed
+        # reachable over raw.githubusercontent.com immediately, and over Pages
+        # as soon as Pages is switched on for the branch. A push made with
+        # GITHUB_TOKEN does not start another workflow run, so this cannot loop.
+        run: |
+          set -euo pipefail
+          git config user.name "${{ github.actor }}"
+          git config user.email "${{ github.actor_id }}+${{ github.actor }}@users.noreply.github.com"
+          # The stamp rides along with the feed: both describe the release that
+          # was just published.
+          echo "${{ steps.appcheck.outputs.stamp }}" > .build-stamp
+          .github/scripts/commit_generated.sh \
+            "Update source feed for ${{ steps.tag.outputs.tag }}" \
+            s.json apps.json icon.png index.html .build-stamp
+
+      - name: Stage the Pages site
+        if: steps.appcheck.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p _site
+          cp index.html s.json apps.json icon.png _site/
+          ls -l _site
+
+      - name: Hand the site to the Pages job
+        if: steps.appcheck.outputs.skip != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: madeira-pages
+          path: _site
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Collect logs on failure
+        if: failure()
+        run: |
+          mkdir -p logs
+          cp build.log logs/ 2>/dev/null || true
+          find build -path '*/obj/*' \( -name '*.err' -o -name '*.log' -o -name 'err-*' \) -size +0 \
+            -exec cp {} logs/ \; 2>/dev/null || true
+          cp wine/build-macos/config.log wine/build-macos/*.out logs/ 2>/dev/null || true
+          ls logs
+
+      - name: Upload the logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: logs
+          if-no-files-found: ignore
+
+  pages:
+    name: Publish the SideStore source to Pages
+    needs: build
+    if: needs.build.outputs.published == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      # A job-level block replaces the workflow-level one outright, so the
+      # scopes the actions in this job need are all listed here: actions:read
+      # for pulling the artifact the build job left behind, pages+id-token for
+      # the deployment itself.
+      actions: read
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+
+    steps:
+      - name: Enable Pages if it is not on yet
+        id: configure
+        # GitHub's own Actions token may not CREATE a Pages site - that needs
+        # repository-admin rights, so it answers "Resource not accessible by
+        # integration" until Pages has been switched on once by hand. Once the
+        # site exists this step simply finds it. A repository without Pages is
+        # not a broken build, so the job reports what to switch on and stays
+        # green: the feed is committed to the branch either way and stays
+        # reachable over raw.githubusercontent.com.
+        continue-on-error: true
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - uses: actions/download-artifact@v4
+        if: steps.configure.outcome == 'success'
+        with:
+          name: madeira-pages
+          path: _site
+
+      - uses: actions/upload-pages-artifact@v3
+        if: steps.configure.outcome == 'success'
+        with:
+          path: _site
+
+      - name: Deploy
+        id: deploy
+        if: steps.configure.outcome == 'success'
+        # Pages set to "Deploy from a branch" rejects a workflow deployment.
+        # That is a working setup too - it serves the committed feed directly -
+        # so it must not fail the build either.
+        continue-on-error: true
+        uses: actions/deploy-pages@v4
+
+      - name: Where the source lives
+        env:
+          RAW_URL: https://raw.githubusercontent.com/${{ github.repository }}/${{ github.event.repository.default_branch }}/s.json
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.deploy.outcome }}" = "success" ]; then
+            PAGE="${{ steps.deploy.outputs.page_url }}"
+            echo "Pages:  $PAGE"
+            echo "Source: ${PAGE}s.json"
+            echo "::notice::SideStore source: ${PAGE}s.json"
+          else
+            SITE="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}"
+            echo "::warning::GitHub Pages is not set up yet. Once, under Settings -> Pages, set Source to 'GitHub Actions'; the SideStore source will then be at ${SITE}/s.json. Until then it works unchanged at ${RAW_URL}"
+            echo "Source (without Pages): $RAW_URL"
+          fi
