@@ -286,20 +286,6 @@ int sh_launch(HMODULE module, void *engine, void *client_user,
         return 45;
     }
     o->event("launch-option-index", (int32_t)launch_option);
-    static char actual_utf8[32768];
-    static wchar_t actual[32768], expected[32768], normalized[32768];
-    DWORD length = GetEnvironmentVariableW(L"MADEIRA_STEAM_HOST_EXPECTED_INSTALL", expected, 32768);
-    if (!length || length >= 32768) return 41;
-    int32_t got = ((install_dir_fn)(*(void ***)manager)[5])(manager, appid, actual_utf8, sizeof(actual_utf8));
-    if (got <= 0 || got >= (int32_t)sizeof(actual_utf8) ||
-        !memchr(actual_utf8, 0, sizeof(actual_utf8)) ||
-        !MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, actual_utf8, -1, actual, 32768)) return 41;
-    length = GetFullPathNameW(actual, 32768, normalized, NULL);
-    if (!length || length >= 32768 || _wcsicmp(normalized, expected)) {
-        o->event("launch-install-directory-mismatch", 1);
-        return 41;
-    }
-    o->event("launch-install-directory-verified", 1);
     /* Program start: checked before anything is published or prepared. */
     static wchar_t program_text[32768], program[32768];
     SetLastError(ERROR_SUCCESS);
@@ -309,9 +295,38 @@ int sh_launch(HMODULE module, void *engine, void *client_user,
         o->event("launch-program-invalid", 1);
         return SH_PROGRAM_INVALID;
     }
+    /* A free program start (MADEIRA_STEAM_HOST_PROGRAM_FREE=1) is a copy of the game
+     * Steam did not install: there is no install folder to verify and no custom
+     * executable to prepare. The licence check above still decided for this app;
+     * the program then runs anywhere on a local drive and asks Valve's client
+     * itself. Without a program it is refused. */
+    bool free_start = wide_flag(L"MADEIRA_STEAM_HOST_PROGRAM_FREE", L'1');
+    if (free_start && !program_start) {
+        o->event("launch-program-invalid", 1);
+        return SH_PROGRAM_INVALID;
+    }
+    o->event("launch-program-free", free_start);
+    static char actual_utf8[32768];
+    static wchar_t actual[32768], expected[32768], normalized[32768];
+    DWORD length;
+    if (!free_start) {
+        length = GetEnvironmentVariableW(L"MADEIRA_STEAM_HOST_EXPECTED_INSTALL", expected, 32768);
+        if (!length || length >= 32768) return 41;
+        int32_t got = ((install_dir_fn)(*(void ***)manager)[5])(manager, appid, actual_utf8, sizeof(actual_utf8));
+        if (got <= 0 || got >= (int32_t)sizeof(actual_utf8) ||
+            !memchr(actual_utf8, 0, sizeof(actual_utf8)) ||
+            !MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, actual_utf8, -1, actual, 32768)) return 41;
+        length = GetFullPathNameW(actual, 32768, normalized, NULL);
+        if (!length || length >= 32768 || _wcsicmp(normalized, expected)) {
+            o->event("launch-install-directory-mismatch", 1);
+            return 41;
+        }
+        o->event("launch-install-directory-verified", 1);
+    }
     if (program_start) {
         length = GetFullPathNameW(program_text, 32768, program, NULL);
-        if (!length || length >= 32768 || !sh_program_inside(program, normalized) ||
+        if (!length || length >= 32768 ||
+            !(free_start ? sh_program_local(program) : sh_program_inside(program, normalized)) ||
             GetFileAttributesW(program) == INVALID_FILE_ATTRIBUTES) {
             o->event("launch-program-invalid", 1);
             return SH_PROGRAM_INVALID;
@@ -326,7 +341,7 @@ int sh_launch(HMODULE module, void *engine, void *client_user,
      * the manifest's CheckGuid block. Failure never launches the game.
      * MADEIRA_DOCK_CEG=0 restores the previous direct LaunchApp.
      */
-    if (wide_flag(L"MADEIRA_STEAM_HOST_CEG", L'1')) {
+    if (!free_start && wide_flag(L"MADEIRA_STEAM_HOST_CEG", L'1')) {
         if (wide_flag(L"MADEIRA_DOCK_CEG", L'0')) o->event("ceg-disabled", 1);
         else {
             /* ml2000: Valve's client reaches its own client service through

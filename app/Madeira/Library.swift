@@ -275,6 +275,11 @@ struct LibraryEntry: Codable, Identifiable {
     /// it to launch the game (madeira-dock MADEIRA_STEAM_HOST_PROGRAM); it and every
     /// program it starts can use Steam. nil: Steam's own launch, as always.
     var dockProgram: String?
+    /// A game added by hand (no Steam install) that starts with Steam running: Madeira
+    /// Dock signs in, Valve's client confirms the account owns `steamID` (the game Find
+    /// on Steam linked), and Dock then starts this entry's program, wherever it is in
+    /// drive_c, for it to ask Steam itself (madeira-dock MADEIRA_STEAM_HOST_PROGRAM_FREE).
+    var dockSteam: Bool?
     /// The install folder, build and picked program a Steam game's `bits` and
     /// `graphicsAPI` were read for, and whether Steam's launch configuration was
     /// cached (LibraryModel.refreshSteamMetadata); any change reads them again.
@@ -430,6 +435,8 @@ struct LibraryEntry: Codable, Identifiable {
 
     /// A Steam game that starts as its own program ("Start with: The game").
     var startsSteamGameDirectly: Bool { steamAppID != nil && steamStart == "game" }
+    /// A game added by hand that starts through Madeira Dock with Steam running (`dockSteam`).
+    var startsWithSteamRunning: Bool { desktop != true && steamAppID == nil && dockSteam == true && steamID != nil }
     /// What a launch starts, relative to drive_c: "The game"'s program inside the
     /// install folder, else `relativePath`.
     var launchRelativePath: String {
@@ -576,8 +583,8 @@ struct LibraryEntry: Codable, Identifiable {
         // "The game"'s identity and the launch's working folder, for this launch only
         // (the bridge reads and clears them); every other launch starts without them.
         unsetenv("MADEIRA_STEAM_APPID"); unsetenv("MADEIRA_STEAM_APPPATH"); unsetenv("MADEIRA_WORKDIR")
-        if steamAppID != nil {
-            // A Steam game through Madeira Dock: Dock has set what starts (ContentView.startDock);
+        if steamAppID != nil || startsWithSteamRunning {
+            // A Steam game (or a game started with Steam running) through Madeira Dock: Dock has set what starts (ContentView.startDock);
             // the virtual monitor follows this entry's Resolution, as below. "The game" starts
             // its own program below, like any library game.
             if !startsSteamGameDirectly {
@@ -3028,6 +3035,14 @@ struct LibraryDetail: View {
                     Button("Find on Steam", systemImage: "magnifyingglass") { findCover = true }
                     Button("Choose cover image", systemImage: "photo") { importCover = true }
                     if entry.coverFile != nil { Button((entry.steamAppID ?? entry.steamID) != nil ? "Use Steam artwork" : "Remove cover image") { entry.coverFile = nil } }
+                    // A game added by hand, linked to a Steam game: start it with Steam running.
+                    if entry.steamAppID == nil, entry.steamID != nil {
+                        Toggle("Start with Steam running", isOn: Binding(get: { entry.dockSteam == true }, set: { entry.dockSteam = $0 ? true : nil }))
+                        if entry.dockSteam == true {
+                            Text("Madeira Dock signs in to Steam, Steam checks that your account owns the linked game, then this program starts and can use Steam itself.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
                 } }
                 // A Steam game's cloud saves, then how it starts, under its library
                 // details (SteamGames.swift).

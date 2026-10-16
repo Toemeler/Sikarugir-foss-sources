@@ -23,6 +23,8 @@ bool sh_parse_launch_option(const char *text, uint32_t *option)
 
 static wchar_t sh_fold(wchar_t c) { return c >= L'A' && c <= L'Z' ? (wchar_t)(c - L'A' + L'a') : c; }
 
+static bool sh_program_tail(const wchar_t *program, size_t base, size_t length);
+
 bool sh_program_inside(const wchar_t *program, const wchar_t *install)
 {
     if (!program || !install) return false;
@@ -34,7 +36,13 @@ bool sh_program_inside(const wchar_t *program, const wchar_t *install)
         if (sh_fold(a) != sh_fold(b)) return false;
     }
     if (program[base] != L'\\' && program[base] != L'/') return false;
-    /* No empty, "." or ".." component after the install directory. */
+    return sh_program_tail(program, base, length);
+}
+
+/* After `base` (a separator): no empty, "." or ".." component, and an .exe name. */
+static bool sh_program_tail(const wchar_t *program, size_t base, size_t length)
+{
+    if (length < base + 6) return false;
     for (size_t i = base; i < length; ) {
         size_t j = i + 1;
         while (j < length && program[j] != L'\\' && program[j] != L'/') ++j;
@@ -45,6 +53,16 @@ bool sh_program_inside(const wchar_t *program, const wchar_t *install)
     }
     const wchar_t *ext = program + length - 4;
     return ext[0] == L'.' && sh_fold(ext[1]) == L'e' && sh_fold(ext[2]) == L'x' && sh_fold(ext[3]) == L'e';
+}
+
+bool sh_program_local(const wchar_t *program)
+{
+    if (!program) return false;
+    size_t length = wcslen(program);
+    wchar_t drive = sh_fold(program[0]);
+    if (length < 8 || drive < L'a' || drive > L'z' || program[1] != L':' ||
+        (program[2] != L'\\' && program[2] != L'/')) return false;
+    return sh_program_tail(program, 2, length);
 }
 
 bool sh_launch_option_missing(const void *payload, size_t size, uint32_t option)

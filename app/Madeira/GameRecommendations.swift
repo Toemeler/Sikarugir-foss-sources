@@ -72,6 +72,18 @@ struct GameRecommendation: Equatable {
     /// folder has one, Madeira Dock starts it with Valve's client running for it,
     /// as if picked in Game details › Steam › Program. Without one, nothing changes.
     var program: String? = nil
+    /// The game's Steam store App ID: a game added by hand that still has its
+    /// program's file name as its title takes the list's title and this app's store
+    /// artwork (LibraryEntry.steamID, as Game details › Find on Steam sets it). A game
+    /// added by hand whose program is `program` starts with Steam running, for this app.
+    var storeAppID: Int? = nil
+
+    /// Whether two program file names are the same program: case and "_" for " " do not
+    /// matter ("PLAY_MADEIRA.exe" is "PLAY MADEIRA.exe").
+    static func sameProgram(_ a: String, _ b: String) -> Bool {
+        func key(_ s: String) -> String { s.lowercased().replacingOccurrences(of: "_", with: " ") }
+        return key(a) == key(b)
+    }
 
     /// The config file's text as GameProfile stores it (one trailing newline).
     var fileText: String { config.hasSuffix("\n") ? config : config + "\n" }
@@ -543,7 +555,9 @@ enum GameRecommendations {
     /// Version 2 (owner's request, 2026-10-16): when its install folder has PLAY
     /// MADEIRA.exe, Madeira Dock starts that instead of Steam's launch of the game, so
     /// it uses less memory; Valve's client still runs, for the Seamless Co-op launcher
-    /// it starts, which asks for Steam. PLAY MADEIRA.exe added by hand gets this list too.
+    /// it starts, which asks for Steam. PLAY_MADEIRA.exe added by hand (a copy Steam did
+    /// not install) gets this list too, the Elden Ring title and artwork, and starts
+    /// with Steam running.
     static let eldenRing = GameRecommendation(
         id: "elden-ring", title: "Elden Ring", version: 2,
         config: """
@@ -563,7 +577,7 @@ enum GameRecommendations {
         env.MADEIRA_EC_HOOK_TRACE = 0
         """,
         wineVCRT: false, fastSync: true, fpsMode: 3, resolution: "1280x720", display: "fit",
-        program: "PLAY MADEIRA.exe")
+        program: "PLAY MADEIRA.exe", storeAppID: 1245620)
 
     /// Raft (Unity, Direct3D 11 through DXMT) for an 8 GB iPad Pro M4 (owner's
     /// request, 2026-10-15). Not device-tested yet: every line is one the owner
@@ -708,7 +722,7 @@ enum GameRecommendations {
             return godOfWar
         case "horizonzerodawn.exe":
             return horizonZeroDawn
-        case "eldenring.exe", "ersc_launcher.exe", "play madeira.exe":
+        case "eldenring.exe", "ersc_launcher.exe", "play madeira.exe", "play_madeira.exe":
             // The game, the Seamless Co-op mod's launcher beside it, which starts it, or
             // PLAY MADEIRA.exe, which uses less memory.
             return eldenRing

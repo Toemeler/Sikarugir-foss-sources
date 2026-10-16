@@ -113,6 +113,14 @@ account owns; the session ends when the last of them has. Results 53 (not a
 program in the game's folder) and 54 (could not be started). Without a chosen
 program, nothing changes: every other start is Steam's `LaunchApp`.
 
+A game **added by hand** (not installed by Steam) that is linked to a Steam
+game (Find on Steam) can **Start with Steam running** (Library details;
+`LibraryEntry.dockSteam`). Dock signs in and Valve's client confirms the
+account owns the linked game, then Dock starts the entry's own program from
+wherever it is in drive_c (`MADEIRA_STEAM_HOST_PROGRAM_FREE=1`): no install
+folder check, no custom executables, no one-time installs. The program asks
+Steam itself.
+
 ## How a launch works
 
 1. Madeira checks: JIT is enabled, no session has run in this app run,

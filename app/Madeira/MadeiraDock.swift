@@ -34,6 +34,9 @@ struct DockGame: Identifiable, Equatable, Sendable {
     let library: String         // drive-relative steamapps folder
     let installed: Bool         // StateFlags has "fully installed"
     let customExecutables: Bool // the install record lists per-user executables (CheckGuid)
+    /// A game added by hand, started with Steam running (LibraryEntry.dockSteam): Steam did
+    /// not install it, so there is no install record, folder check or one-time install.
+    var standalone = false
 
     /// Windows path of the game's folder, which Dock requires Valve's client to resolve to.
     var windowsInstallPath: String {
@@ -155,12 +158,13 @@ enum MadeiraDock {
     /// Everything a launch needs, checked before any sign-in is handed over.
     static func validate(_ game: DockGame, drive: URL, bundled: Bool = MadeiraDock.bundled) throws {
         guard bundled else { throw DockError.message("Madeira Dock is not built into this app. Run build/madeira-dock/build.sh.") }
-        guard validAppID(game.id), validFolderName(game.installDir) else {
+        guard validAppID(game.id), game.standalone || validFolderName(game.installDir) else {
             throw DockError.message("This game's Steam install record is invalid.")
         }
         guard FileManager.default.fileExists(atPath: drive.appendingPathComponent(SteamRuntimeFiles.relativeRoot + "/steamclient64.dll").path) else {
             throw DockError.message("Steam's client files are missing. Download Valve's client components first.")
         }
+        if game.standalone { return }
         var isFolder: ObjCBool = false
         guard game.installed,
               FileManager.default.fileExists(atPath: drive.appendingPathComponent(game.library + "/common/" + game.installDir).path, isDirectory: &isFolder),
@@ -333,7 +337,7 @@ enum MadeiraDock {
         "ceg-finished-jobs", "ceg-result", "ceg-disabled", "ceg-unsupported-client",
         "ceg-scm", "ceg-scm-started", "ceg-scm-error", "ceg-service-registered", "ceg-service-install", "ceg-service-stop", "ceg-scm-stopped",
         "game-scm", "game-scm-timeout", "launch-keep-alive",
-        "launch-program-invalid", "launch-program-verified", "launch-program-appid", "launch-program-start-error",
+        "launch-program-invalid", "launch-program-verified", "launch-program-free", "launch-program-appid", "launch-program-start-error",
         "launch-program-job", "launch-program-started", "launch-program-ended", "launch-program-exit",
         "shutdown-begin", "shutdown-complete", "probe-result"]
     /// The host's report rounds (madeira-dock src/main.c).
@@ -449,6 +453,8 @@ enum MadeiraDock {
         // Every other start leaves these unset, so Valve's client launches the game as before.
         unsetenv("MADEIRA_STEAM_HOST_PROGRAM_ARGS")
         if let program { setenv("MADEIRA_STEAM_HOST_PROGRAM", program, 1) } else { unsetenv("MADEIRA_STEAM_HOST_PROGRAM") }
+        // A game Steam did not install: no install folder to verify (madeira-dock launch.c).
+        if game.standalone && program != nil { setenv("MADEIRA_STEAM_HOST_PROGRAM_FREE", "1", 1) } else { unsetenv("MADEIRA_STEAM_HOST_PROGRAM_FREE") }
         SteamLog.event("[dock-launch] program=\(program == nil ? "steam" : "chosen")")
         setenv("MADEIRA_STEAM_HOST_CLIENT_DIR", SteamRuntimeFiles.windowsRoot, 1)
         setenv("MADEIRA_STEAM_HOST_EXPECTED_INSTALL", game.windowsInstallPath, 1)

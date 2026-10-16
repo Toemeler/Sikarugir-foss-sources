@@ -263,7 +263,7 @@ assert er['tested'] == ['swap-mb = 6144', 'swap-mode = 2', 'swap-min-mb = 1', 'v
 assert not any(line.startswith('clear-rects') for line in er['lines']), 'Elden Ring has no clear-rects'
 # Version 2 (owner's request, 2026-10-16): the Steam game starts PLAY MADEIRA.exe when its folder has it (less memory).
 assert er['version'] == 2 and er['switches'] == ('wineVCRT: false, fastSync: true, fpsMode: 3, resolution: "1280x720", '
-                                                 'display: "fit", program: "PLAY MADEIRA.exe"'), er
+                                                 'display: "fit", program: "PLAY MADEIRA.exe", storeAppID: 1245620'), er
 assert not any('program:' in p['switches'] for p in presets.values() if p is not er), "a program is Elden Ring's only"
 fields = block(apply_src, '    private static func takeEntryFields(', '\n    }\n')
 assert 'if let program = rec.program { entry.takeRecommendedProgram(program) }' in fields
@@ -319,7 +319,7 @@ assert 'case "ghostoftsushima.exe":' in match and 'case "gow.exe":' in match and
 assert 'case "horizonzerodawn.exe":\n            return horizonZeroDawn' in match
 assert 'if steamAppID == horizonZeroDawnAppID || installFolder == "horizon zero dawn" { return horizonZeroDawn }' in match
 assert 'if steamAppID == eldenRingAppID || installFolder == "elden ring" { return eldenRing }' in match
-assert 'case "eldenring.exe", "ersc_launcher.exe", "play madeira.exe":' in match and 'return eldenRing' in match
+assert 'case "eldenring.exe", "ersc_launcher.exe", "play madeira.exe", "play_madeira.exe":' in match and 'return eldenRing' in match
 assert 'if steamAppID == raftAppID || installFolder == "raft" { return raft }' in match
 assert 'case "raft.exe":\n            return raft' in match
 # Little Nightmares Enhanced Edition by its App ID only: its program's name is not known yet.
@@ -419,6 +419,8 @@ struct LibraryEntry {
     var fastSync: Bool? = nil
     var semaphoreFastPath: Bool? = nil
     var recommendedProgram: String? = nil
+    var steamID: Int? = nil
+    var dockSteam: Bool? = nil
     mutating func takeRecommendedProgram(_ name: String) { recommendedProgram = name }   // SteamGames.swift
 }
 
@@ -685,6 +687,16 @@ check(R.prepare(&ring, new: true) && ring.recommendedProgram == "PLAY MADEIRA.ex
 var rdrCopy = LibraryEntry(title: "Red Dead Redemption 2", windowsPath: steam + #"\RDR2 Copy"#, steamAppID: 1174180)
 check(R.prepare(&rdrCopy, new: true) && rdrCopy.recommendedProgram == nil, "a list without a program sets none")
 check(R.eldenRing.switchSummary.hasSuffix("starts PLAY MADEIRA.exe"), R.eldenRing.switchSummary)
+var byHand = LibraryEntry(title: "PLAY MADEIRA", windowsPath: #"C:\Games\ELDEN RING\Game\PLAY MADEIRA.exe"#)
+check(R.prepare(&byHand, new: true) && byHand.title == "Elden Ring" && byHand.steamID == 1245620 && byHand.dockSteam == true,
+      "PLAY MADEIRA.exe added by hand: the list's title, Elden Ring's store artwork, Steam running")
+var underscore = LibraryEntry(title: "PLAY MADEIRA", windowsPath: #"C:\Elden Ring\PLAY_MADEIRA.exe"#)
+check(id(underscore.windowsPath) == "elden-ring" && R.prepare(&underscore, new: true) && underscore.title == "Elden Ring"
+      && underscore.dockSteam == true, "PLAY_MADEIRA.exe (underscore) added by hand, as on the owner's iPad")
+check(GameRecommendation.sameProgram("PLAY_MADEIRA.exe", "PLAY MADEIRA.exe") && !GameRecommendation.sameProgram("eldenring.exe", "PLAY MADEIRA.exe"), "sameProgram")
+var named = LibraryEntry(title: "My Elden Ring", windowsPath: #"C:\ER2\eldenring.exe"#)
+check(R.prepare(&named, new: true) && named.title == "My Elden Ring" && named.steamID == nil && named.dockSteam == nil,
+      "a title of the player's own stays; the game's own program does not start with Steam running by itself")
 print("PASS: drive_c is looked up for a program's list; a new entry takes the fields of a list written for its path before")
 '''
 

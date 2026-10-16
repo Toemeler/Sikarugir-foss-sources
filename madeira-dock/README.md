@@ -75,6 +75,9 @@ nothing else.
     the program names its own app). The program, and every program it starts, finds the signed-in
     client like desktop Steam; Valve's client answers their Steam calls and licence questions, and
     their DRM runs unmodified. Without the variable, every launch is the `LaunchApp` above.
+    With `MADEIRA_STEAM_HOST_PROGRAM_FREE=1` (a copy of the game Steam did not install), the
+    licence check above still decides for the app, but there is no install folder to verify
+    and no custom executable to prepare: the program may be any `.exe` on a local drive.
 12. **Stays up while the game runs** (for a program start: until the program and every process
     it started have ended), pumping the client's callbacks, so the game's
     `steam_api64.dll` talks to a live, signed-in client exactly as it would on a PC. The game,

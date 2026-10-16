@@ -178,6 +178,23 @@ extension GameRecommendations {
         if let mode = rec.display { entry.display = mode == DisplayMode.fit.rawValue ? nil : mode }
         // A Steam game whose install folder has the list's program starts it through Madeira Dock.
         if let program = rec.program { entry.takeRecommendedProgram(program) }
+        // A game added by hand, still named after its program file (PLAY MADEIRA.exe is
+        // "PLAY MADEIRA"): the list's title and the game's store artwork. A title the
+        // player chose, a store match and a Steam game keep theirs.
+        let file = entry.windowsPath.replacingOccurrences(of: "/", with: "\\").split(separator: "\\").last.map(String.init) ?? ""
+        if let store = rec.storeAppID, entry.steamAppID == nil, entry.steamID == nil {
+            let fileTitle = (file.lowercased().hasSuffix(".exe") ? String(file.dropLast(4)) : file).replacingOccurrences(of: "_", with: " ")
+            if entry.title.caseInsensitiveCompare(fileTitle) == .orderedSame {
+                entry.title = rec.title
+                entry.steamID = store
+            }
+        }
+        // The list's program added by hand (a copy Steam did not install): it starts with
+        // Steam running, for the game the entry is linked to (LibraryEntry.dockSteam).
+        if let program = rec.program, entry.steamAppID == nil, entry.steamID != nil,
+           GameRecommendation.sameProgram(file, program) {
+            entry.dockSteam = true
+        }
     }
 
     private static var marks: [String: String] {

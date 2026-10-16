@@ -207,10 +207,9 @@ extension LibraryEntry {
     /// several. Without one, nothing changes.
     mutating func takeRecommendedProgram(_ name: String) {
         guard let appID = steamAppID else { return }
-        let wanted = name.lowercased()
         let folder = LibraryModel.drive.appendingPathComponent(relativePath, isDirectory: true)
         let found = SteamDirectStart.programs(in: folder)
-            .filter { ($0.split(separator: "/").last.map(String.init) ?? $0).lowercased() == wanted }
+            .filter { GameRecommendation.sameProgram($0.split(separator: "/").last.map(String.init) ?? $0, name) }
             .min { $0.split(separator: "/").count < $1.split(separator: "/").count }
         guard let found else {
             LogStore.shared.log("[steam-start] app=\(appID) recommended program not in the install folder; start unchanged")

@@ -2523,6 +2523,16 @@ struct ContentView: View {
         // A Steam game starts through Madeira Dock with its own launch profile (SteamGames.swift),
         // unless its Game details page chose "The game": then its own program starts below, like
         // any library game (SteamDirectStart).
+        // A game added by hand, linked to a Steam game, with "Start with Steam running":
+        // Madeira Dock signs in and checks the licence, then starts this entry's program.
+        if entry.startsWithSteamRunning, let storeID = entry.steamID {
+            let game = DockGame(id: storeID, name: entry.title, installDir: "", library: "", installed: true,
+                                customExecutables: false, standalone: true)
+            LogStore.shared.log("[steam-games] play app=\(storeID) with Steam running (added by hand)")
+            BCDLaunch.applyLibrary(entry)
+            startDock(game, compactPool: MadeiraDockModel.shared.compactPool, profile: entry)
+            return
+        }
         if let appID = entry.steamAppID, !entry.startsSteamGameDirectly {
             guard let game = MadeiraDock.games(drive: MadeiraDock.drive).first(where: { $0.id == appID }) else {
                 library.error = "Steam no longer lists this game as installed. Refresh the library and try again."; return
@@ -3394,7 +3404,7 @@ struct ContentView: View {
             // Without a choice (no configuration to be had, or no entry whose .exe is on disk:
             // a launcher started through a .bat, say) it is key 0, which every Dock start
             // used before; Dock stops at once if Steam names that entry missing.
-            let options = await SteamOwnedLibrary.shared.launchOptions(appID: game.id)
+            let options = game.standalone ? nil : await SteamOwnedLibrary.shared.launchOptions(appID: game.id)
             let installFolder = MadeiraDock.drive.appendingPathComponent(game.library + "/common/" + game.installDir)
             let chosen = options.flatMap { SteamDirectStart.choose($0, installFolder: installFolder)?.launchIndex }
             let launchOption = chosen ?? 0
@@ -3402,7 +3412,11 @@ struct ContentView: View {
             // A program chosen for Dock (Game details › Steam › Program) starts instead of
             // Steam's launch, with Valve's client running for it; it must still be installed.
             var program: String? = nil
-            if let chosenProgram = profile?.dockProgram, !chosenProgram.isEmpty {
+            if game.standalone, let profile {
+                // A game added by hand: its own program, wherever it is in drive_c.
+                program = profile.launchWindowsPath
+                LogStore.shared.log("[madeira-dock] app \(game.id): starts the game's own program with Steam running")
+            } else if let chosenProgram = profile?.dockProgram, !chosenProgram.isEmpty {
                 guard let found = await Task.detached(priority: .userInitiated, operation: {
                     SteamDirectStart.onDisk(chosenProgram, in: installFolder, directory: false)
                 }).value else {
@@ -3429,8 +3443,10 @@ struct ContentView: View {
             // session. No session runs yet, so the registry files can be read and written.
             // madeira-bcd: they run in a session of their own (DockInstallers.installsOnly), and
             // a Reset takes out what they installed; the other games share those installs.
-            DockInstallers.prepare(game, drive: MadeiraDock.drive, prefix: MadeiraDock.prefix,
-                                   others: MadeiraDock.games(drive: MadeiraDock.drive))
+            if game.standalone { DockInstallers.none() } else {
+                DockInstallers.prepare(game, drive: MadeiraDock.drive, prefix: MadeiraDock.prefix,
+                                       others: MadeiraDock.games(drive: MadeiraDock.drive))
+            }
             if DockInstallers.installsOnly {
                 // No host runs in this session: nothing will take the sign-in transfer.
                 MadeiraDock.cleanup()

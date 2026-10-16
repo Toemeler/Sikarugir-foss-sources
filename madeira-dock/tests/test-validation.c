@@ -165,6 +165,12 @@ int main(void)
     assert(!sh_program_inside(L"C:\\Steam\\steamapps\\common\\Game", install));
     assert(!sh_program_inside(NULL, install) && !sh_program_inside(L"C:\\a\\b.exe", NULL));
     assert(!sh_program_inside(L"C:\\b.exe", L"C:"));
+    assert(sh_program_local(L"C:\\Elden Ring\\PLAY_MADEIRA.exe"));
+    assert(sh_program_local(L"d:/Games/x/Start.EXE") && sh_program_local(L"C:\\ab.exe"));
+    assert(!sh_program_local(L"C:\\Games\\..\\x.exe") && !sh_program_local(L"C:\\Games\\\\x.exe"));
+    assert(!sh_program_local(L"C:\\Games\\start.bat") && !sh_program_local(L"Games\\start.exe"));
+    assert(!sh_program_local(L"\\\\server\\share\\x.exe") && !sh_program_local(L"1:\\Games\\x.exe"));
+    assert(!sh_program_local(L"C:\\.exe") && !sh_program_local(NULL));
     puts("steam-host: launch-option, entitlement-list, launch-result, content-wait, config-wait, session-wait, CEG, service-manager, "
          "install-service-manager and program-path validation cases passed");
 }

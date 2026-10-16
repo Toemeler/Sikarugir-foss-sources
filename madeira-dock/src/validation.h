@@ -22,6 +22,10 @@ bool sh_parse_launch_option(const char *text, uint32_t *option);
  * .exe path strictly inside the verified install directory. ASCII case-insensitive,
  * as Windows compares these names; no "." or ".." component is accepted. */
 bool sh_program_inside(const wchar_t *program, const wchar_t *install);
+/* A program started without a Steam install (MADEIRA_STEAM_HOST_PROGRAM_FREE): an
+ * absolute, already normalized .exe path on a local drive ("C:\Games\x.exe"), with
+ * the same component rules. */
+bool sh_program_local(const wchar_t *program);
 /* Recognize only the client's bounded missing-entry diagnostic; never log it. */
 bool sh_launch_option_missing(const void *payload, size_t size, uint32_t option);
 
