@@ -582,6 +582,8 @@ enum GameRecommendations {
     /// Version 6 (2026-10-16): build 22 still made five of them, so unity-region-256
     /// serves each as the aligned 256 MB Unity uses (half the room), and the arena
     /// keeps 512 MB instead of 768 (the emulator used 1.2-1.8 GB of its 3 GB).
+    /// arena-mb only applies on a small map: signed with the increased memory limit,
+    /// the map reaches 0x8000000000 and the emulator gets its 16 GB band (build 24).
     static let raft = GameRecommendation(
         id: "raft", title: "Raft", version: 6,
         config: """

@@ -28768,6 +28768,17 @@ void ios_reserve_fex_arena(void)
      * nothing -- and that should land on evidence, not on this hypothesis. */
     {
         long long mb = madeira_cfg_int( "arena-mb", 0 );   /* ml1095: madeira.cfg arena-mb = N */
+        /* madeira-raft: the cap is for a map that ends below the hardware band. With
+         * the increased memory limit the iPad Pro M4's map ends at 0x8000000000
+         * instead of 0x7180000000, the 16 GB band is free, and Raft's arena-mb = 3072
+         * then starved FEX (FEXAlloc failed at 2807 of 3072 MB, build 22) while
+         * all of Unity's reserves fitted below it. So a full map takes the band. */
+        if (mb > 0 && arena_task_max >= 0x7ff0000000ull)
+        {
+            dprintf( 2, "[fex-arena] arena-mb = %lld ignored: the map ends at 0x%llx, so the 16 GB hardware "
+                        "band is there to take\n", mb, arena_task_max );
+            mb = 0;
+        }
         if (mb > 0)
         {
             arena_size_cap = (unsigned long long)mb * 1024ull * 1024ull;
