@@ -176,6 +176,7 @@ extension GameRecommendations {
             else if let lines720 = ResolutionChoices.screen720Value { entry.resolution = lines720 }
         }
         if let mode = rec.display { entry.display = mode == DisplayMode.fit.rawValue ? nil : mode }
+        if let factor = rec.metalFXUpscale { entry.metalFXUpscale = factor }
         // A Steam game whose install folder has the list's program starts it through Madeira Dock.
         if let program = rec.program { entry.takeRecommendedProgram(program) }
         // A game added by hand, still named after its program file (PLAY MADEIRA.exe is

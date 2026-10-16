@@ -68,6 +68,8 @@ struct GameRecommendation: Equatable {
     static let screen720 = "screen@720"
     /// Aspect & scaling (DisplayMode raw value); "fit" is the default.
     var display: String? = nil
+    /// Game details › Display › MetalFX upscaling (LibraryEntry.metalFXUpscale): 1.5 or 2.
+    var metalFXUpscale: Double? = nil
     /// A Steam game's program by file name ("PLAY MADEIRA.exe"): when its install
     /// folder has one, Madeira Dock starts it with Valve's client running for it,
     /// as if picked in Game details › Steam › Program. Without one, nothing changes.
@@ -101,6 +103,7 @@ struct GameRecommendation: Equatable {
             parts.append("FPS limit \(label)")
         }
         if let resolution { parts.append(resolution == Self.screen720 ? "this screen's shape at 720 lines" : resolution) }
+        if let metalFXUpscale { parts.append("MetalFX \(metalFXUpscale == 2 ? "2" : String(metalFXUpscale))x") }
         if let program { parts.append("starts \(program)") }
         return parts.joined(separator: ", ")
     }
@@ -562,8 +565,12 @@ enum GameRecommendations {
     /// DLL's path into the game it started (WriteProcessMemory) and loads it there;
     /// Madeira denied that write, so the game loaded an empty name and the launcher
     /// ended it (build/wineserver/mach_ios.c).
+    /// Version 4 (owner's request, 2026-10-16): the game starts at 800x600 (4:3), so
+    /// the virtual monitor is 800x600 too (no side bars from a 16:9 monitor), MetalFX
+    /// upscales it 2x to 1600x1200, and Fit scales that to the whole screen of a 4:3
+    /// iPad (the iPad Pro M4 13" is 2752x2064).
     static let eldenRing = GameRecommendation(
-        id: "elden-ring", title: "Elden Ring", version: 3,
+        id: "elden-ring", title: "Elden Ring", version: 4,
         config: """
         # Madeira's recommended settings for Elden Ring (an 8 GB iPad; not device-tested yet).
         # Reset to Recommended, at the bottom of the game's settings, brings them back.
@@ -581,8 +588,8 @@ enum GameRecommendations {
         env.MADEIRA_LOCK_ORPHAN = stamped
         env.MADEIRA_EC_HOOK_TRACE = 0
         """,
-        wineVCRT: false, fastSync: true, fpsMode: 3, resolution: "1280x720", display: "fit",
-        program: "PLAY MADEIRA.exe", storeAppID: 1245620)
+        wineVCRT: false, fastSync: true, fpsMode: 3, resolution: "800x600", display: "fit",
+        metalFXUpscale: 2, program: "PLAY MADEIRA.exe", storeAppID: 1245620)
 
     /// Raft (Unity, Direct3D 11 through DXMT) for an 8 GB iPad Pro M4 (owner's
     /// request, 2026-10-15). Not device-tested yet: every line is one the owner

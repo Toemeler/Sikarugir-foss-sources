@@ -264,8 +264,9 @@ assert er['tested'] == ['swap-mb = 6144', 'swap-mode = 2', 'swap-min-mb = 1', 'v
 assert not any(line.startswith('local-write') for p in presets.values() if p is not er for line in p['lines']), "local-write is Elden Ring's only"
 assert not any(line.startswith('clear-rects') for line in er['lines']), 'Elden Ring has no clear-rects'
 # Version 2 (owner's request, 2026-10-16): the Steam game starts PLAY MADEIRA.exe when its folder has it (less memory).
-assert er['version'] == 3 and er['switches'] == ('wineVCRT: false, fastSync: true, fpsMode: 3, resolution: "1280x720", '
-                                                 'display: "fit", program: "PLAY MADEIRA.exe", storeAppID: 1245620'), er
+# Version 4 (owner's request, 2026-10-16): 800x600 (4:3, as the game starts), MetalFX 2x, Fit on a 4:3 iPad.
+assert er['version'] == 4 and er['switches'] == ('wineVCRT: false, fastSync: true, fpsMode: 3, resolution: "800x600", '
+                                                 'display: "fit", metalFXUpscale: 2, program: "PLAY MADEIRA.exe", storeAppID: 1245620'), er
 assert not any('program:' in p['switches'] for p in presets.values() if p is not er), "a program is Elden Ring's only"
 fields = block(apply_src, '    private static func takeEntryFields(', '\n    }\n')
 assert 'if let program = rec.program { entry.takeRecommendedProgram(program) }' in fields
@@ -422,6 +423,7 @@ struct LibraryEntry {
     var semaphoreFastPath: Bool? = nil
     var recommendedProgram: String? = nil
     var steamID: Int? = nil
+    var metalFXUpscale: Double? = nil
     var dockSteam: Bool? = nil
     mutating func takeRecommendedProgram(_ name: String) { recommendedProgram = name }   // SteamGames.swift
 }
@@ -684,7 +686,8 @@ check(R.prepare(&gotOwn, new: true) && LibraryPrefs.avx(got) && LibraryPrefs.nvi
 check(LogStore.shared.lines.contains { $0.hasPrefix("[recommended] Red Dead Redemption 2: rdr2-steam v\(R.rdr2Steam.version) written (first sight)") }, "log line")
 UserDefaults.standard.removeObject(forKey: key)
 var ring = LibraryEntry(title: "ELDEN RING", windowsPath: steam + #"\ELDEN RING"#, steamAppID: 1245620)
-check(R.prepare(&ring, new: true) && ring.recommendedProgram == "PLAY MADEIRA.exe" && ring.fpsMode == 3,
+check(R.prepare(&ring, new: true) && ring.recommendedProgram == "PLAY MADEIRA.exe" && ring.fpsMode == 3
+      && ring.resolution == "800x600" && ring.metalFXUpscale == 2,
       "a new Elden Ring entry takes PLAY MADEIRA.exe with the list's fields")
 var rdrCopy = LibraryEntry(title: "Red Dead Redemption 2", windowsPath: steam + #"\RDR2 Copy"#, steamAppID: 1174180)
 check(R.prepare(&rdrCopy, new: true) && rdrCopy.recommendedProgram == nil, "a list without a program sets none")
