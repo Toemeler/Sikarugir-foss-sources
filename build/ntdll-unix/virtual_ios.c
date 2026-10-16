@@ -19218,6 +19218,74 @@ static void *map_reserved_area_inner( void *limit_low, void *limit_high, size_t 
     return ptr;
 }
 
+#ifdef WINE_IOS
+/* madeira-raft: lend the FEX arena's free space to a big guest view that fits
+ * nowhere else. madeira.cfg arena-lend-keep-mb = N (0, the default: off).
+ *
+ * On the iPad Pro M4 the game's window is [0x7000000000, 0x7180000000); the
+ * JIT alias and a 3 GB arena leave about 2.4 GB of it. Raft's Unity main thread
+ * kept reserving 512 MB blocks (0x1ffff000, ~1% committed) as it loaded: three
+ * fit, the fourth found no gap ([mmap-place] NO GAP FITS, largest 317 MB), and
+ * Unity stored through the NULL -- with FEX at 1160 MB of its 3072 MB (37%,
+ * build 19, log 2026-10-15 22:34). The fixed split was the wall, not the total.
+ *
+ * So, only when every other placement has failed, a request of 64 MB or more
+ * is placed in the arena, top-down (FEX's spans and thread state are placed
+ * first-fit, so they fill the bottom), and only while the arena keeps at least
+ * N MB free after it. A lent view is an ordinary view: freeing it gives the
+ * range back to the arena. virtual_mutex held. */
+static void *ios_fex_arena_lend( size_t size, int unix_prot, size_t align_mask )
+{
+    static long long keep = -1;
+    static unsigned lent_n, refused_n;
+    struct reserved_area *area;
+    struct file_view *view;
+    ULONG_PTR lo = ios_fex_arena_base_unix, hi = ios_fex_arena_end_unix, cursor;
+    size_t covered = 0, free_bytes;
+    void *ptr = NULL;
+
+    if (keep < 0) keep = madeira_cfg_int( "arena-lend-keep-mb", 0 ) * 1024ll * 1024ll;   /* madeira.cfg arena-lend-keep-mb = N: lend the FEX arena to big guest views, keeping N MB free; 0 off */
+    if (keep <= 0 || size < (64u << 20) || !lo || hi <= lo) return NULL;
+
+    cursor = lo;
+    WINE_RB_FOR_EACH_ENTRY( view, &views_tree, struct file_view, entry )
+    {
+        ULONG_PTR b = (ULONG_PTR)view->base, e;
+
+        if (b >= hi) break;
+        e = view->size > ~(ULONG_PTR)0 - b ? ~(ULONG_PTR)0 : b + view->size;
+        if (e <= lo || e <= b) continue;
+        if (b < lo) b = lo;
+        if (e > hi) e = hi;
+        if (e > cursor) { covered += e - (b > cursor ? b : cursor); cursor = e; }
+    }
+    free_bytes = hi - lo - covered;
+    if (free_bytes < size || free_bytes - size < (size_t)keep)
+    {
+        if (refused_n++ < 16)
+            dprintf( 2, "[arena-lend] NOT lending 0x%lx: the arena has %llu MB free and keeps %lld MB "
+                        "for the emulator (arena-lend-keep-mb)\n", (unsigned long)size,
+                     (unsigned long long)(free_bytes >> 20), keep >> 20 );
+        return NULL;
+    }
+
+    LIST_FOR_EACH_ENTRY( area, &reserved_areas, struct reserved_area, entry )
+    {
+        if (!area->fex_only) continue;
+        ptr = find_reserved_free_area_outside_preloader( area->base, (char *)area->base + area->size,
+                                                         size, 1, align_mask );
+        if (ptr) break;
+    }
+    if (ptr && anon_mmap_fixed( ptr, size, unix_prot, 0 ) != ptr) ptr = NULL;
+    if (lent_n++ < 64)
+        dprintf( 2, "[arena-lend] #%u %s 0x%lx in the FEX arena [0x%lx,0x%lx)%s%p; it had %llu MB free, "
+                    "keeps %lld MB (arena-lend-keep-mb)\n", lent_n, ptr ? "LENT" : "no gap for",
+                 (unsigned long)size, (unsigned long)lo, (unsigned long)hi, ptr ? " at " : " ",
+                 ptr, (unsigned long long)(free_bytes >> 20), keep >> 20 );
+    return ptr;
+}
+#endif
+
 /***********************************************************************
  *           map_fixed_area
  *
@@ -19646,6 +19714,12 @@ static NTSTATUS map_view( struct file_view **view_ret, void *base, size_t size,
              * ceiling_relaxable, so its contract still holds. */
             if (!ceiling_relaxable)
             {
+#ifdef WINE_IOS
+                /* madeira-raft: see ios_fex_arena_lend; only where the caller's limits allow the arena */
+                if (limit_low <= ios_fex_arena_base_unix && (!limit_high || limit_high >= ios_fex_arena_end_unix) &&
+                    (ptr = ios_fex_arena_lend( host_size, unix_prot, align_mask )))
+                    goto done;
+#endif
                 ios_af_set( 2, ios_scan_fail_errno, ios_scan_fail_addr, size );
                 return STATUS_NO_MEMORY;
             }
@@ -19658,6 +19732,14 @@ static NTSTATUS map_view( struct file_view **view_ret, void *base, size_t size,
         {
             if ((ptr = anon_mmap_alloc( view_size, unix_prot )) == MAP_FAILED)
             {
+#ifdef WINE_IOS
+                int saved = errno;
+
+                /* madeira-raft: the last placement left -- see ios_fex_arena_lend */
+                if (limit_low <= ios_fex_arena_base_unix && (!limit_high || limit_high >= ios_fex_arena_end_unix) &&
+                    (ptr = ios_fex_arena_lend( host_size, unix_prot, align_mask ))) goto done;
+                errno = saved;
+#endif
                 ios_af_set( 3, errno, NULL, view_size );
                 status = (errno == ENOMEM) ? STATUS_NO_MEMORY : STATUS_INVALID_PARAMETER;
                 ERR( "anon mmap error %s, size %p, unix_prot %#x\n",

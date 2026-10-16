@@ -570,9 +570,16 @@ enum GameRecommendations {
     /// gets -job-worker-count 2 -force-gfx-direct (env.MADEIRA_CHILD_ARGS, as for
     /// GTA V's -nobattleye), so Unity starts fewer threads (two job workers, no
     /// render thread) and each thread the emulator does not start leaves room in
-    /// the 3 GB arena. Build 19 still closed before the game's window.
+    /// the 3 GB arena. Build 19 still closed before the game's window: Unity's
+    /// fourth 512 MB block found no gap while the arena was 37% used. Version 4
+    /// (2026-10-16): arena-lend-keep-mb = 768 lets such a block use the arena's free
+    /// space when nothing else fits, as long as 768 MB stay free for the emulator,
+    /// and Raft.exe also gets a 256 KB background job temp allocator block: Unity
+    /// says that allocator reserves up to 512 blocks, 512 MB at its 1 MB default,
+    /// the size of the blocks it kept reserving (a reserve of ~128 MB in the log
+    /// confirms it was that allocator).
     static let raft = GameRecommendation(
-        id: "raft", title: "Raft", version: 3,
+        id: "raft", title: "Raft", version: 4,
         config: """
         # Madeira's recommended settings for Raft (an 8 GB iPad; not device-tested yet).
         # Reset to Recommended, at the bottom of the game's settings, brings them back.
@@ -582,9 +589,10 @@ enum GameRecommendations {
         vram-mb = 2048
         avail-phys = 1
         arena-mb = 3072
+        arena-lend-keep-mb = 768
         env.MADEIRA_LOCK_ORPHAN = stamped
         env.MADEIRA_EC_HOOK_TRACE = 0
-        env.MADEIRA_CHILD_ARGS = Raft.exe -job-worker-count 2 -force-gfx-direct
+        env.MADEIRA_CHILD_ARGS = Raft.exe -job-worker-count 2 -force-gfx-direct -memorysetup-job-temp-allocator-block-size-background=262144
         """,
         wineVCRT: false, fastSync: true, fpsMode: 3, resolution: GameRecommendation.screen720, display: "fit")
 
