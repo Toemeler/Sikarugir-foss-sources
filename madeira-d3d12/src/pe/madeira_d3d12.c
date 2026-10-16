@@ -408,7 +408,7 @@ struct mad_device {
      * old lookup walked the TEXTURE registries, which a buffer never enters, so
      * every typed-buffer binding failed and its draw or dispatch was skipped. */
     CRITICAL_SECTION view_lock;
-    struct mad_viewrec { UINT64 id; UINT32 a, b; } *vmap; unsigned vmap_cap, vmap_used, vmap_live;
+    struct mad_viewrec { UINT64 id; UINT32 a, b; struct mad_resource *r; UINT64 flat; } *vmap; unsigned vmap_cap, vmap_used, vmap_live;   /* r, flat: mad_air_flat_view */
     /* ml1061: GPU timeline. Every committed batch signals `gpu_event` with its
      * serial, so "has the GPU finished X" is a read of one value instead of a
      * blocking wait. Fences are delivered by a worker thread; argument-ring
@@ -567,7 +567,17 @@ static void mad_vmap_put_locked(struct mad_device *d, UINT64 id, UINT32 a, UINT3
     i = mad_vmap_slot(id, d->vmap_cap);
     while (d->vmap[i].id && d->vmap[i].id != id) i = (i + 1) & (d->vmap_cap - 1);
     if (!d->vmap[i].id) { d->vmap_used++; d->vmap_live++; }
-    d->vmap[i].id = id; d->vmap[i].a = a; d->vmap[i].b = b;
+    d->vmap[i].id = id; d->vmap[i].a = a; d->vmap[i].b = b; d->vmap[i].r = NULL; d->vmap[i].flat = 0;
+}
+/* The texture a view id belongs to, for mad_air_flat_view. Caller holds view_lock. */
+static void mad_vmap_set_res_locked(struct mad_device *d, UINT64 id, struct mad_resource *r) {
+    unsigned i;
+    if (!d->vmap_cap || !id || id == MAD_VREC_TOMB) return;
+    i = mad_vmap_slot(id, d->vmap_cap);
+    while (d->vmap[i].id) {
+        if (d->vmap[i].id == id) { d->vmap[i].r = r; d->vmap[i].flat = 0; return; }
+        i = (i + 1) & (d->vmap_cap - 1);
+    }
 }
 static void mad_vmap_del_locked(struct mad_device *d, UINT64 id) {
     unsigned i;
@@ -6231,6 +6241,64 @@ static UINT mad_air_array_len(struct mad_device *d, UINT64 view_id) {
     return r->tex_layers ? r->tex_layers : 1;
 }
 
+/* The DXBC backend declares Texture2D / TextureCube / Texture2DMS as texture2d /
+ * texturecube / texture2d_ms, while ml932 allocates and views every such
+ * texture as an ARRAY (the DXIL converter is told to expect arrays). A
+ * texture2d read through a texture2d_array handle returns zeros on Apple GPUs:
+ * Elden Ring's whole UI (logo, "press any button", menus) sampled 0, its alpha
+ * blended to nothing and the title screen stayed black, with now and then one
+ * stray texel filling a quad (a white box). DXMT's D3D11 layer has the same
+ * rule (checkViewUseArray): a shader without TEXTURE_ARRAY gets a non-array
+ * view. This is that view, made once per texture view and kept in the view map
+ * next to its array twin. madeira.cfg air-flat-views = 0 binds the array as before. */
+static int g_air_flat = -1;
+static UINT64 mad_texture_view_id(struct mad_device *d, struct mad_resource *r, enum WMTTextureType want,
+                                  UINT lvl0, UINT nlvl, UINT sl0, UINT nsl, enum WMTPixelFormat pf, UINT swz);
+static UINT64 mad_air_flat_view(struct mad_device *d, UINT64 id) {
+    struct mad_resource *r = NULL;
+    UINT64 flat = 0;
+    UINT type = 0, lvl0 = 0, nlvl = 0, sl0 = 0, pf = 0, swz = 0;
+    enum WMTTextureType want;
+    unsigned i, k;
+    static LONG said;
+    if (g_air_flat < 0) {
+        g_air_flat = mad_cfg_int_pe("air-flat-views", 1) ? 1 : 0;
+        d3d12_log("[madeira-d3d12] air-flat-views = %d (%s)\n", g_air_flat,
+                  g_air_flat ? "DXBC shaders that declare a non-array texture get a non-array view" : "DXBC shaders get the array views as before");
+    }
+    if (!g_air_flat || !id) return id;
+    EnterCriticalSection(&d->view_lock);
+    if (d->vmap_cap)
+        for (i = mad_vmap_slot(id, d->vmap_cap); d->vmap[i].id; i = (i + 1) & (d->vmap_cap - 1))
+            if (d->vmap[i].id == id) { r = d->vmap[i].r; flat = d->vmap[i].flat; break; }
+    if (flat || !r || !r->texture) { LeaveCriticalSection(&d->view_lock); return flat ? flat : id; }
+    if (id == r->gpu_resource_id) {
+        type = r->tex_type; nlvl = r->tex_mips; pf = r->tex_pf; swz = MAD_SWZ_IDENTITY;
+    } else {
+        for (k = 0; k < r->nxview && r->xview[k].id != id; k++) ;
+        if (k == r->nxview) { LeaveCriticalSection(&d->view_lock); return id; }
+        type = r->xview[k].type; lvl0 = r->xview[k].lvl0; nlvl = r->xview[k].nlvl; sl0 = r->xview[k].sl0;
+        pf = r->xview[k].pf; swz = r->xview[k].swz;
+    }
+    LeaveCriticalSection(&d->view_lock);
+    want = type == WMTTextureType2DArray ? WMTTextureType2D
+         : type == WMTTextureTypeCubeArray ? WMTTextureTypeCube
+         : type == WMTTextureType2DMultisampleArray ? WMTTextureType2DMultisample : (enum WMTTextureType)type;
+    flat = want == (enum WMTTextureType)type ? id
+         : mad_texture_view_id(d, r, want, lvl0, nlvl, sl0, want == WMTTextureTypeCube ? 6 : 1, (enum WMTPixelFormat)pf, swz);
+    if (!flat) flat = id;
+    EnterCriticalSection(&d->view_lock);   /* the map may have grown meanwhile: find the record again */
+    if (d->vmap_cap)
+        for (i = mad_vmap_slot(id, d->vmap_cap); d->vmap[i].id; i = (i + 1) & (d->vmap_cap - 1))
+            if (d->vmap[i].id == id) { d->vmap[i].flat = flat; break; }
+    LeaveCriticalSection(&d->view_lock);
+    if (flat != id && InterlockedIncrement(&said) <= 12)
+        d3d12_log("[madeira-d3d12] air-flat-views: %s %ux%u, view type %u -> %u for a DXBC shader (id %llu -> %llu)\n",
+                  r->name ? r->name : "texture", r->width, r->height, type, (unsigned)want,
+                  (unsigned long long)id, (unsigned long long)flat);
+    return flat;
+}
+
 /* A typed-buffer view's element count and first element, recomputed exactly as
  * mad_typed_buffer_view did when it built the view. */
 static int mad_air_texbuf(struct mad_device *d, UINT64 view_id, UINT32 *count, UINT32 *first) {
@@ -7370,7 +7438,8 @@ static int mad_air_build_tables_ex_body(struct mad_exec *e, const struct mad_roo
                 tab[off + 0] = de.texture_view_id;
                 tab[off + 1] = ((UINT64)count << 32) | (UINT64)first;
             } else {
-                tab[off + 0] = de.texture_view_id;
+                tab[off + 0] = (rg->flags & MADEIRA_IR_AIR_F_TEXTURE_ARRAY) ? de.texture_view_id
+                                                                            : mad_air_flat_view(d, de.texture_view_id);
                 tab[off + 1] = ((UINT64)mad_air_array_len(d, de.texture_view_id) << 32)
                              | (de.metadata & 0xffffffffull);     /* min LOD clamp */
             }
@@ -12277,6 +12346,7 @@ static UINT64 mad_texture_view_id(struct mad_device *d, struct mad_resource *r, 
     r->xview[k].tex = tex; r->xview[k].id = id;
     r->nxview = k + 1;
     mad_vmap_put_locked(d, id, nsl ? nsl : 1, 0);
+    mad_vmap_set_res_locked(d, id, r);
     mad_view_census("texture", r, r->nxview);
     LeaveCriticalSection(&d->view_lock);
     if (said++ < 24)
@@ -13396,6 +13466,7 @@ static HRESULT mad_create_resource_at(struct mad_device *d, D3D12_HEAP_TYPE heap
          * inside this DLL. */
         EnterCriticalSection(&d->view_lock);
         mad_vmap_put_locked(d, r->gpu_resource_id, r->tex_layers ? r->tex_layers : 1, 0);
+        mad_vmap_set_res_locked(d, r->gpu_resource_id, r);
         LeaveCriticalSection(&d->view_lock);
         r->name = is_depth ? "DepthTarget" : (desc->Flags & D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET) ? "RenderTarget" : "Texture";
         r->is_depth = is_depth;
