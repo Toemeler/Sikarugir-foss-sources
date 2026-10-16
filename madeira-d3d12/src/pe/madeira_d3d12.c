@@ -2980,6 +2980,28 @@ static void mad_capture_draw_inputs(struct mad_exec *e, const struct mad_cmd *c)
                   (unsigned long long)de.texture_view_id, r->name ? r->name : "?", r->width, r->height, (unsigned)r->tex_pf, (unsigned)r->desc.Format, r->tex_mips, r->tex_layers, xv);
         if (said_tex++ < 64) mad_capture_one(e, benc, r, &v0, seq, 100 + rg->lower_bound, "tex", 0, NULL);
     }
+    /* The vertex stage's constant buffers (DXBC backend: pso->air), as kind vcb:
+     * a vertex shader that scales its positions by a constant buffer draws
+     * nothing visible when that buffer reads as zeros. */
+    for (k = 0; e->pso->backend == MADEIRA_IR_BACKEND_AIRCONV && k < e->pso->nair; k++) {
+        const struct madeira_ir_air_range *rg = &e->pso->air[k]; struct mad_descriptor de; UINT64 direct = 0, va, boff = 0; const char *why = "?";
+        struct mad_resource *br;
+        if (rg->type != MADEIRA_IR_AIR_CBV) continue;
+        if (!mad_air_resolve(e, e->rs, e->root, (const UINT32 (*)[64])e->consts, rg, ~0u, &de, &direct, &why)) {
+            d3d12_log("[capture-draw] vertex b%u does not resolve (%s)\n", rg->lower_bound, why ? why : "?"); continue;
+        }
+        va = direct ? direct : de.gpu_va;
+        br = va ? mad_resolve_address(e->q->device, va, &boff) : NULL;
+        if (!br || !br->buffer) { d3d12_log("[capture-draw] vertex b%u va=0x%llx resolves to no live buffer\n", rg->lower_bound, (unsigned long long)va); continue; }
+        d3d12_log("[capture-draw] vertex b%u va=0x%llx -> %s heap-type %u off=%llu size=%llu cpu=%p own=%p\n", rg->lower_bound, (unsigned long long)va,
+                  br->name ? br->name : "buf", (unsigned)br->heap, (unsigned long long)boff, (unsigned long long)br->size, br->cpu, br->own_mem);
+        if (br->cpu && boff + 64 <= br->size) {   /* what the CPU sees at record time, to compare with the GPU's copy */
+            const float *f = (const float *)((const char *)br->cpu + boff);
+            d3d12_log("[capture-draw] vertex b%u cpu[0..15]: %g %g %g %g | %g %g %g %g | %g %g %g %g | %g %g %g %g\n", rg->lower_bound,
+                      f[0], f[1], f[2], f[3], f[4], f[5], f[6], f[7], f[8], f[9], f[10], f[11], f[12], f[13], f[14], f[15]);
+        }
+        mad_capture_buffer(e, benc, br, boff, 4096, "vcb", rg->lower_bound, seq);
+    }
     if (!e->pso->ps_nair && e->pso->backend != MADEIRA_IR_BACKEND_AIRCONV && e->rs) {
         /* madeira-bcd: a converter (DXIL) pipeline has no airconv range list, so
          * the loop above saw nothing; walk its root signature like capture-cs. */
