@@ -19992,6 +19992,22 @@ static void mad_present_run(struct mad_swapchain *s, UINT idx) {
         if (g_capture_on) { mad_capture_finish(s->queue->device, g_capture_frame); if (g_capture_left) g_capture_left--; g_capture_on = 0; }
         memset(&a, 0, sizeof a); a.op = 0; MadeiraCtl(&a);
         if (a.ret) { g_capture_left += a.ret; d3d12_log("[capture] %u frame(s) requested at present #%llu\n", a.ret, (unsigned long long)s->presents); }
+        {   /* madeira.cfg capture-at-present = N (capture-every = M, capture-count = K, default 1):
+             * the same capture as the in-game menu's, without the menu -- for a
+             * session whose screen stays black, so the menu button cannot be found. */
+            static long long at = -1, every, count;
+            if (at < 0) {
+                at = mad_cfg_int_pe("capture-at-present", 0);
+                every = mad_cfg_int_pe("capture-every", 0);
+                count = mad_cfg_int_pe("capture-count", 1);
+                if (at > 0) d3d12_log("[capture] capture-at-present = %lld (every %lld, %lld capture(s))\n", at, every, count);
+            }
+            if (at > 0 && count > 0 && (long long)s->presents >= at) {
+                g_capture_left++; count--;
+                d3d12_log("[capture] capture-at-present: frame requested at present #%llu\n", (unsigned long long)s->presents);
+                if (every > 0) at += every; else count = 0;
+            }
+        }
         {   /* ml1136: live fence-chain switch from the overlay; lists already running keep their mode */
             int want;
             memset(&a, 0, sizeof a); a.op = 6; MadeiraCtl(&a);
