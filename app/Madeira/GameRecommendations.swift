@@ -579,8 +579,11 @@ enum GameRecommendations {
     /// UnityPlayer.dll reserves its own 256 MB region with 256 MB of alignment slack
     /// (the 0x1ffff000 reserves); no memorysetup key changes that size, and
     /// -systemallocator (read from the command line only) makes them plain malloc.
+    /// Version 6 (2026-10-16): build 22 still made five of them, so unity-region-256
+    /// serves each as the aligned 256 MB Unity uses (half the room), and the arena
+    /// keeps 512 MB instead of 768 (the emulator used 1.2-1.8 GB of its 3 GB).
     static let raft = GameRecommendation(
-        id: "raft", title: "Raft", version: 5,
+        id: "raft", title: "Raft", version: 6,
         config: """
         # Madeira's recommended settings for Raft (an 8 GB iPad; not device-tested yet).
         # Reset to Recommended, at the bottom of the game's settings, brings them back.
@@ -590,7 +593,8 @@ enum GameRecommendations {
         vram-mb = 2048
         avail-phys = 1
         arena-mb = 3072
-        arena-lend-keep-mb = 768
+        arena-lend-keep-mb = 512
+        unity-region-256 = 1
         env.MADEIRA_LOCK_ORPHAN = stamped
         env.MADEIRA_EC_HOOK_TRACE = 0
         env.MADEIRA_CHILD_ARGS = Raft.exe -job-worker-count 2 -force-gfx-direct -systemallocator

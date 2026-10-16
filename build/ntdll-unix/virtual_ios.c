@@ -26107,6 +26107,16 @@ void virtual_set_large_address_space(void)
  *
  * NtAllocateVirtualMemory[Ex] implementation.
  */
+#ifdef WINE_IOS
+/* madeira-raft: see allocate_virtual_memory. */
+static int ios_unity_region_256( void )
+{
+    static int on = -1;
+    if (on < 0) on = madeira_cfg_int( "unity-region-256", 0 ) != 0;   /* madeira.cfg unity-region-256 = 1: Unity's 512 MB - 4 KB region reserves become their aligned 256 MB */
+    return on;
+}
+#endif
+
 static NTSTATUS allocate_virtual_memory( void **ret, SIZE_T *size_ptr, ULONG type, ULONG protect,
                                          ULONG_PTR limit_low, ULONG_PTR limit_high,
                                          ULONG_PTR align, ULONG attributes )
@@ -26184,6 +26194,28 @@ static NTSTATUS allocate_virtual_memory( void **ret, SIZE_T *size_ptr, ULONG typ
 
             if (vprot & VPROT_WRITECOPY) status = STATUS_INVALID_PAGE_PROTECTION;
             else if (is_dos_memory) status = allocate_dos_memory( &view, vprot );
+#ifdef WINE_IOS
+            /* madeira-raft: madeira.cfg unity-region-256 = 1 (default 0: off). Unity's
+             * DynamicHeapAllocator wants a 256 MB region on a 256 MB boundary (its
+             * ptr >> 28 lookup), so Baselib reserves 256 MB + 256 MB - 4 KB of slack,
+             * PAGE_NOACCESS, and uses only the aligned 256 MB inside it. One of these per
+             * allocator was what filled Raft's 6 GB window on the iPad Pro M4. Placed on a
+             * 256 MB boundary, the aligned part starts at the base, so a 256 MB view is
+             * all the caller ever touches; VirtualAlloc returns only the base, and the
+             * release (MEM_RELEASE, size 0) frees the view. A miss falls back to the
+             * whole reservation. */
+            else if (!base && (type & ~MEM_TOP_DOWN) == MEM_RESERVE && protect == PAGE_NOACCESS &&
+                     (*size_ptr == 0x1ffff000) && !align &&
+                     ios_unity_region_256() &&
+                     !(status = map_view( &view, NULL, 0x10000000, type, vprot, limit_low, limit_high, 0x0fffffff )))
+            {
+                static unsigned n;
+                size = 0x10000000;
+                if (n++ < 32)
+                    dprintf( 2, "[unity-region] #%u 512 MB - 4 KB reserve served as the aligned 256 MB at %p "
+                                "(unity-region-256)\n", n, view->base );
+            }
+#endif
             else status = map_view( &view, base, size, type, vprot, limit_low, limit_high,
                                     align ? align - 1 : granularity_mask );
 
