@@ -566,9 +566,13 @@ enum GameRecommendations {
     /// Version 2 (2026-10-15): a 3 GB emulator arena. On the iPad Pro M4
     /// (build 18) the game's window is 6 GB; the 4 GB arena left Unity no room for
     /// its second 512 MB reserve and it crashed at start, and 2 GB ran the emulator
-    /// out of room for its threads, so Unity hung.
+    /// out of room for its threads, so Unity hung. Version 3 (2026-10-16): Raft.exe
+    /// gets -job-worker-count 2 -force-gfx-direct (env.MADEIRA_CHILD_ARGS, as for
+    /// GTA V's -nobattleye), so Unity starts fewer threads (two job workers, no
+    /// render thread) and each thread the emulator does not start leaves room in
+    /// the 3 GB arena. Build 19 still closed before the game's window.
     static let raft = GameRecommendation(
-        id: "raft", title: "Raft", version: 2,
+        id: "raft", title: "Raft", version: 3,
         config: """
         # Madeira's recommended settings for Raft (an 8 GB iPad; not device-tested yet).
         # Reset to Recommended, at the bottom of the game's settings, brings them back.
@@ -580,6 +584,7 @@ enum GameRecommendations {
         arena-mb = 3072
         env.MADEIRA_LOCK_ORPHAN = stamped
         env.MADEIRA_EC_HOOK_TRACE = 0
+        env.MADEIRA_CHILD_ARGS = Raft.exe -job-worker-count 2 -force-gfx-direct
         """,
         wineVCRT: false, fastSync: true, fpsMode: 3, resolution: GameRecommendation.screen720, display: "fit")
 
