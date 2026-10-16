@@ -103,6 +103,11 @@ library session. The sheet has:
 Tap a game. Dock is started with Steam's default launch option only; custom
 arguments are not supported.
 
+In this fork Dock has no licence wait of its own: it launches as soon as
+Valve's client is signed in (about 5 s sooner). Valve's client still refuses
+a launch for a game the account does not own. `env.MADEIRA_DOCK_LICENCE_WAIT = 1`
+restores the old check.
+
 A library Steam game can instead name a **Program** for Dock (Game details ›
 Steam › Program; a game list's `program`, GameRecommendations.swift). Dock then
 signs in and checks the licence as always, publishes itself as the running
@@ -115,8 +120,7 @@ program, nothing changes: every other start is Steam's `LaunchApp`.
 
 A game **added by hand** (not installed by Steam) that is linked to a Steam
 game (Find on Steam) can **Start with Steam running** (Library details;
-`LibraryEntry.dockSteam`). Dock signs in and Valve's client confirms the
-account owns the linked game, then Dock starts the entry's own program from
+`LibraryEntry.dockSteam`). Dock signs in and starts the entry's own program from
 wherever it is in drive_c (`MADEIRA_STEAM_HOST_PROGRAM_FREE=1`): no install
 folder check, no custom executables, no one-time installs. The program asks
 Steam itself.

@@ -90,6 +90,12 @@ static int offline_session(HMODULE module, void *engine, void *client_user, cons
             last_state = state;
         }
         uint64_t now = o->now_ms();
+        /* No licence wait of the host's own offline either (see sh_session). */
+        if (!enabled("MADEIRA_DOCK_LICENCE_WAIT") && now - begin >= 1000) {
+            o->event("session-entitlement-skipped", 1);
+            if (!enabled("MADEIRA_STEAM_HOST_LAUNCH")) return 0;
+            return sh_launch(module, engine, client_user, api, o, pipe, user, id, app, layout);
+        }
         /* The client loads its cached licences after the offline logon; give it a
          * second before the first question, then ask once a second. */
         if (now - begin >= 1000 && now - last_list >= 1000) {
@@ -298,6 +304,22 @@ int sh_session(HMODULE module, void *engine, const struct sh_api *api,
                 ++lost;
                 o->event("session-authenticated-online", 0);
             }
+        }
+        /* No licence wait of the host's own (owner's decision for this fork): the
+         * launch starts as soon as the client is online. Valve's client still decides:
+         * LaunchApp refuses an app the account does not own (reported as
+         * launch-client-error), and a program started here asks the client about its
+         * own app. MADEIRA_DOCK_LICENCE_WAIT=1 restores the 5 s wait and the check. */
+        if (was_online && !offline_since && !enabled("MADEIRA_DOCK_LICENCE_WAIT")) {
+            o->event("session-entitlement-skipped", 1);
+            result = 0;
+            if (offline_abi) {
+                int32_t ready = ((can_offline_fn)v[214])(client_user);
+                o->event("session-offline-ready", ready);
+            }
+            if (enabled("MADEIRA_STEAM_HOST_LAUNCH"))
+                result = sh_launch(module, engine, client_user, api, o, pipe, user, id, (uint32_t)app, layout);
+            break;
         }
         /* Allow the real licence/app-info callbacks to arrive after logon.
          * A true subscription is required; timeout never permits launch.

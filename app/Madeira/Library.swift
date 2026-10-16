@@ -3039,7 +3039,7 @@ struct LibraryDetail: View {
                     if entry.steamAppID == nil, entry.steamID != nil {
                         Toggle("Start with Steam running", isOn: Binding(get: { entry.dockSteam == true }, set: { entry.dockSteam = $0 ? true : nil }))
                         if entry.dockSteam == true {
-                            Text("Madeira Dock signs in to Steam, Steam checks that your account owns the linked game, then this program starts and can use Steam itself.")
+                            Text("Madeira Dock signs in to Steam, then this program starts and can use Steam itself.")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                     }

@@ -337,7 +337,7 @@ enum MadeiraDock {
         "ceg-finished-jobs", "ceg-result", "ceg-disabled", "ceg-unsupported-client",
         "ceg-scm", "ceg-scm-started", "ceg-scm-error", "ceg-service-registered", "ceg-service-install", "ceg-service-stop", "ceg-scm-stopped",
         "game-scm", "game-scm-timeout", "launch-keep-alive",
-        "launch-program-invalid", "launch-program-verified", "launch-program-free", "launch-program-appid", "launch-program-start-error",
+        "launch-program-invalid", "launch-program-verified", "launch-program-free", "session-entitlement-skipped", "launch-program-appid", "launch-program-start-error",
         "launch-program-job", "launch-program-started", "launch-program-ended", "launch-program-exit",
         "shutdown-begin", "shutdown-complete", "probe-result"]
     /// The host's report rounds (madeira-dock src/main.c).
