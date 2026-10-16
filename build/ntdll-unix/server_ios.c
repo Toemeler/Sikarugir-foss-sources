@@ -2466,6 +2466,11 @@ static void ios_xprobe_main( void )
     mach_timebase_info_data_t tb;
     struct rusage_info_v6 ru, pru;
     struct ios_xp_pe pe, ppe;
+    /* madeira-bcd xp-events: page faults, copy-on-write faults, syscalls and
+     * context switches per sample (TASK_EVENTS_INFO), so a thread stuck on one
+     * store can be told apart from a fault storm (Elden Ring, build 40: GXWorker
+     * 20 s at one stp in mad_list_push with no presents). Measurement only. */
+    task_events_info_data_t tev = {0}, ptev = {0}; int have_tev = 0;
     uint64_t t_start, t_prev;
     uint32_t gen = 0; int have_ru = 0, have_pe = 0, used = 0, ru_rc;
     char n0[32] = "?", n1[32] = "?"; size_t sz; int nlev = 0;
@@ -2602,6 +2607,19 @@ static void ios_xprobe_main( void )
                           (pe.t_flush - ppe.t_flush) * qf, (long long)(pe.n_lat - ppe.n_lat), (pe.t_lat - ppe.t_lat) * qf,
                           (pe.t_draw - ppe.t_draw) * qf, (pe.t_cmt - ppe.t_cmt) * qf, (pe.t_pool - ppe.t_pool) * qf,
                           (long long)(pe.ecl_calls - ppe.ecl_calls), (pe.t_ecl_caller - ppe.t_ecl_caller) * qf );
+            {   /* madeira-bcd xp-events (see the declaration) */
+                mach_msg_type_number_t tcnt = TASK_EVENTS_INFO_COUNT;
+                int ln = (int)strlen( line );
+                if (task_info( mach_task_self(), TASK_EVENTS_INFO, (task_info_t)&tev, &tcnt ) == KERN_SUCCESS)
+                {
+                    if (have_tev && ln < (int)sizeof(line) - 96)
+                        snprintf( line + ln, sizeof(line) - ln, " | ev flt=%u cow=%u pin=%u sysu=%u sysm=%u csw=%u",
+                                  (unsigned)(tev.faults - ptev.faults), (unsigned)(tev.cow_faults - ptev.cow_faults),
+                                  (unsigned)(tev.pageins - ptev.pageins), (unsigned)(tev.syscalls_unix - ptev.syscalls_unix),
+                                  (unsigned)(tev.syscalls_mach - ptev.syscalls_mach), (unsigned)(tev.csw - ptev.csw) );
+                    ptev = tev; have_tev = 1;
+                }
+            }
             wine_log_write( "%s", line );
             /* threads: roles always, then the busiest; role + Windows TID : P ms / E ms : P GHz / E GHz : M instructions */
             {

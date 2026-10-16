@@ -10187,15 +10187,59 @@ static void mad_perf_cb(obj_handle_t cb, double wait_s) {
     }
     mad_perf_unlock();
 }
+/* madeira-bcd frame-times: every present-to-present interval of the 5 s window,
+ * reported with the ml1108 line as percentiles, hitch counts and a histogram
+ * that can be summed over any span of a run; an interval of 100 ms or more is
+ * also logged at once with the local time, so a hitch can be matched to what
+ * else the log says at that moment. Measurement only (perf-log = 0 turns it
+ * off with the rest of ml1108). Elden Ring, build 40: 5 s averages hid
+ * whether 21-24 fps while walking was even pacing or 30 fps with long gaps. */
+#define MAD_FT_MAX 4096
+static float g_ft_ms[MAD_FT_MAX]; static LONG g_ft_n; static LONGLONG g_ft_last; static LONG g_ft_hitch_said;
+static const float g_ft_edges[] = { 25, 34, 40, 50, 67, 100, 250, 1000 };
+static int mad_ft_cmp(const void *a, const void *b) { float x = *(const float *)a, y = *(const float *)b; return x < y ? -1 : x > y; }
+static void mad_ft_note(LONGLONG now, LONGLONG fq) {
+    float ms;
+    if (!g_ft_last) { g_ft_last = now; return; }
+    ms = (float)(1000.0 * (double)(now - g_ft_last) / (double)fq);
+    g_ft_last = now;
+    if (g_ft_n < MAD_FT_MAX) g_ft_ms[g_ft_n++] = ms;
+    if (ms >= 100.0f && g_ft_hitch_said < 4000) {
+        SYSTEMTIME st; GetLocalTime(&st); g_ft_hitch_said++;
+        d3d12_log("[perf] hitch %.1f ms ending %02u:%02u:%02u.%03u
+", ms, st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
+    }
+}
+static void mad_ft_report(void) {
+    LONG n = g_ft_n, i, k, h[9] = {0}, over34 = 0, over50 = 0, over100 = 0, over250 = 0;
+    SYSTEMTIME st;
+    if (!n) return;
+    qsort(g_ft_ms, n, sizeof *g_ft_ms, mad_ft_cmp);
+    for (i = 0; i < n; i++) {
+        float v = g_ft_ms[i];
+        for (k = 0; k < 8 && v > g_ft_edges[k]; k++) ;
+        h[k]++;
+        over34 += v > 34.0f; over50 += v > 50.0f; over100 += v > 100.0f; over250 += v > 250.0f;
+    }
+    GetLocalTime(&st);
+    d3d12_log("[perf] frame-times %02u:%02u:%02u.%03u n=%ld p50=%.1f p90=%.1f p99=%.1f max=%.1f ms; >34 %ld >50 %ld >100 %ld >250 %ld; "
+              "hist<=25,34,40,50,67,100,250,1000,more %ld %ld %ld %ld %ld %ld %ld %ld %ld
+",
+              st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, n, g_ft_ms[n / 2], g_ft_ms[(n * 9) / 10], g_ft_ms[(n * 99) / 100], g_ft_ms[n - 1],
+              over34, over50, over100, over250, h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7], h[8]);
+    g_ft_n = 0;
+}
 static void mad_perf_present(void) {
     LARGE_INTEGER now, fq; double wall;
     if (g_perf_enabled <= 0) return;
     QueryPerformanceCounter(&now); QueryPerformanceFrequency(&fq);
     mad_perf_lock();
     g_perf_presents++;
+    mad_ft_note(now.QuadPart, fq.QuadPart);   /* madeira-bcd frame-times */
     if (!g_perf_t0) { g_perf_t0 = now.QuadPart; mad_perf_unlock(); return; }
     wall = (double)(now.QuadPart - g_perf_t0) / (double)fq.QuadPart;
     if (wall >= 5.0) {
+        mad_ft_report();   /* madeira-bcd frame-times */
         d3d12_log("[perf] ml1108 %.1fs: presents=%ld (%.1f fps) cbs=%ld gpu_busy=%.0fms (%.0f%% of wall, sum %.0fms) cpu_blocked_in_retire=%.0fms (%.0f%%) per-frame: gpu %.1fms wait %.1fms\n",
                   wall, g_perf_presents, g_perf_presents / wall, g_perf_cbs, g_perf_gpu_union * 1000, 100.0 * g_perf_gpu_union / wall,
                   g_perf_gpu_sum * 1000, g_perf_wait_s * 1000, 100.0 * g_perf_wait_s / wall,
