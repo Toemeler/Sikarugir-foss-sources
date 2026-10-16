@@ -17514,6 +17514,18 @@ static HRESULT device_CreateGraphicsPipelineState_impl(ID3D12Device *This,
         }
         rp.colors[i].pixel_format = pf;
         rp.colors[i].blending_enabled = b->BlendEnable != 0;
+        {   /* diagnostic: madeira.cfg blend-off = <pixel shader entries> draws them unblended,
+             * so a pass whose draws leave nothing tells geometry (shapes appear) from
+             * alpha (they still do not). Read once per game start. */
+            static char list[512]; static int loaded;
+            if (!loaded) { loaded = 1; mad_cfg_str_pe("blend-off", list, sizeof list);
+                           if (list[0]) d3d12_log("[madeira-d3d12] blend-off = %s (diagnostic: these pixel shaders draw unblended)\n", list); }
+            if (list[0] && rp.colors[i].blending_enabled && mad_name_in_list(list, p->ps_name)) {
+                static unsigned said;
+                if (said++ < 16) d3d12_log("[madeira-d3d12] blend-off: '%s' rt%u drawn without blending\n", p->ps_name, i);
+                rp.colors[i].blending_enabled = 0;
+            }
+        }
         rp.colors[i].rgb_blend_operation = mad_blend_op(b->BlendOp);
         rp.colors[i].alpha_blend_operation = mad_blend_op(b->BlendOpAlpha);
         rp.colors[i].src_rgb_blend_factor = mad_blend_factor(b->SrcBlend);
