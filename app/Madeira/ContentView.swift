@@ -4060,7 +4060,7 @@ final class ControlsWindow: UIWindow {
     }
 }
 
-enum TouchControlsHost {
+@MainActor enum TouchControlsHost {
     private static var window: ControlsWindow?
 
     static func attach(to gameWindow: UIWindow? = nil) {
