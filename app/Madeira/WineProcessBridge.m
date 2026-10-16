@@ -902,7 +902,7 @@ static void *wine_process_thread(void *arg) {
 
         // Set environment for Wine
         setenv("WINEPREFIX", g_prefix_path, 1);
-        setenv("HOME", g_prefix_path, 1);
+        if (!getenv("LC_HOME_PATH")) setenv("HOME", g_prefix_path, 1);  /* LiveContainer keeps its HOME */
 
         // Skip check_command_line / reexec_loader
         setenv("WINELOADERNOEXEC", "1", 1);

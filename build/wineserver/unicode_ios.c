@@ -30,6 +30,7 @@
 # include <sys/sysctl.h>
 #endif
 #ifdef __APPLE__
+# include <dlfcn.h>
 # include <mach-o/dyld.h>
 #endif
 
@@ -293,12 +294,17 @@ static char *get_nls_dir(void)
         return strdup(g_ios_nls_dir);
     }
 
-    /* Fallback: try _NSGetExecutablePath */
+    /* Fallback: the binary's own directory */
     char *p, *dir;
     uint32_t dir_size = PATH_MAX;
     dir = malloc( dir_size );
     if (!dir) return NULL;
-    if (_NSGetExecutablePath( dir, &dir_size ))
+    Dl_info info;
+    /* The image holding this code (Madeira's binary even inside LiveContainer). */
+    if (dladdr( (void *)get_nls_dir, &info ) && info.dli_fname && info.dli_fname[0] == '/' &&
+        strlen( info.dli_fname ) < dir_size)
+        strcpy( dir, info.dli_fname );
+    else if (_NSGetExecutablePath( dir, &dir_size ))
     {
         ws_log("[wineserver] get_nls_dir: _NSGetExecutablePath FAILED");
         free( dir );

@@ -691,8 +691,15 @@ static void init_paths(void)
     char exe_path[PATH_MAX];
     uint32_t exe_size = sizeof(exe_path);
     char *p;
+    Dl_info info;
 
-    if (_NSGetExecutablePath( exe_path, &exe_size ) != 0)
+    /* The image holding ntdll, not the process executable: inside
+     * LiveContainer the executable is LiveContainer and Madeira is a
+     * dlopen'ed guest whose bundle holds nls/ and the PE DLLs. */
+    if (dladdr( (void *)init_paths, &info ) && info.dli_fname && info.dli_fname[0] == '/' &&
+        strlen( info.dli_fname ) < sizeof(exe_path))
+        strcpy( exe_path, info.dli_fname );
+    else if (_NSGetExecutablePath( exe_path, &exe_size ) != 0)
         fatal_error( "cannot get executable path\n" );
 
     p = strrchr( exe_path, '/' );
