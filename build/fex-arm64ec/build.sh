@@ -15,6 +15,18 @@ set -eu
 R="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 export PATH="$R/toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin:$PATH"
 B="$R/FEX/build-arm64ec"
+# Madeira's own changes to the pinned FEX, kept here rather than in the submodule
+# (patches/, applied in name order; one already applied is left as it is):
+#   0001-smc-host-page  SMC write traps per 16 KB host page (MADEIRA_SMC_HOST_PAGE=1)
+for P in "$R"/build/fex-arm64ec/patches/*.patch; do
+    [ -e "$P" ] || continue
+    if git -C "$R/FEX" apply --reverse --check "$P" 2>/dev/null; then
+        echo "FEX patch already applied: $(basename "$P")"
+    else
+        git -C "$R/FEX" apply "$P"
+        echo "FEX patch applied: $(basename "$P")"
+    fi
+done
 if [ ! -f "$B/CMakeCache.txt" ]; then
     cmake -S "$R/FEX" -B "$B" -G Ninja -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_TOOLCHAIN_FILE="$R/FEX/Data/CMake/toolchain_mingw.cmake" \

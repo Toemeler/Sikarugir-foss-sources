@@ -569,8 +569,13 @@ enum GameRecommendations {
     /// the virtual monitor is 800x600 too (no side bars from a 16:9 monitor), MetalFX
     /// upscales it 2x to 1600x1200, and Fit scales that to the whole screen of a 4:3
     /// iPad (the iPad Pro M4 13" is 2752x2064).
+    /// Version 5 (owner's request, 2026-10-16): env.MADEIRA_SMC_HOST_PAGE = 1. Seamless
+    /// Co-op's ersc.dll (Themida) decrypts its own code in place and died with c0000005 right
+    /// after it was injected (build 28). FEX caught those writes per 4 KB page while iOS
+    /// protects 16 KB pages, so code it had already translated could be overwritten unseen
+    /// and run stale; the switch makes FEX trap per 16 KB page (build/fex-arm64ec/patches).
     static let eldenRing = GameRecommendation(
-        id: "elden-ring", title: "Elden Ring", version: 4,
+        id: "elden-ring", title: "Elden Ring", version: 5,
         config: """
         # Madeira's recommended settings for Elden Ring (an 8 GB iPad; not device-tested yet).
         # Reset to Recommended, at the bottom of the game's settings, brings them back.
@@ -587,6 +592,7 @@ enum GameRecommendations {
         local-write = 1
         env.MADEIRA_LOCK_ORPHAN = stamped
         env.MADEIRA_EC_HOOK_TRACE = 0
+        env.MADEIRA_SMC_HOST_PAGE = 1
         """,
         wineVCRT: false, fastSync: true, fpsMode: 3, resolution: "800x600", display: "fit",
         metalFXUpscale: 2, program: "PLAY MADEIRA.exe", storeAppID: 1245620)

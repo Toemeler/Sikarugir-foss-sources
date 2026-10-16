@@ -7,7 +7,9 @@
 #
 # Three jobs: LLVM for iOS (hours, so built once and cached), the app (every
 # native library docs/BUILDING.md lists, then Xcode), and the Pages site. The
-# Windows-side DLLs are committed in app/Madeira/*-windows and are not rebuilt.
+# Windows-side DLLs are committed in app/Madeira/*-windows and are not rebuilt,
+# except the x64 emulator xtajit64.dll: built from the pinned FEX plus
+# build/fex-arm64ec/patches.
 
 name: Build
 
@@ -179,11 +181,13 @@ jobs:
             "$(t build/madeira_cfg.h)" "$(t madeira-d3d12)" "$(t app/Madeira/d3d12)" "$LLVM_KEY")"
           PAIRING="pairing-$V-$(k "$(t build/rppairing-ios)")"
           DOCK="dock-$V-$(k "$(t madeira-dock)" "$(t build/madeira-dock)" "$MINGW")"
+          FEXEC="fexec-$V-$(k "$(t FEX)" "$(t build/fex-arm64ec)" "$MINGW")"
           VCRT="vcruntime-$V-$(k "$(git hash-object .github/scripts/fetch_vcruntime.sh)")"
           {
             echo "gnutls=$GNUTLS"; echo "ffmpeg=$FFMPEG"; echo "freetype=$FREETYPE"
             echo "fex=$FEX"; echo "wine=$WINE"; echo "dxmt=$DXMT"
             echo "pairing=$PAIRING"; echo "dock=$DOCK"; echo "vcrt=$VCRT"
+            echo "fexec=$FEXEC"
             echo "llvm=$LLVM_KEY"
           } | tee -a "$GITHUB_OUTPUT"
 
@@ -273,6 +277,14 @@ jobs:
             app/Madeira/arm64ec-windows/dockhost.exe
             app/Madeira/arm64ec-windows/dock-notices.txt
 
+      - name: "Cache: FEX ARM64EC"
+        if: steps.appcheck.outputs.skip != 'true'
+        id: c-fexec
+        uses: actions/cache/restore@v4
+        with:
+          key: ${{ steps.keys.outputs.fexec }}
+          path: app/Madeira/arm64ec-windows/xtajit64.dll
+
       - name: "Cache: Visual C++ runtime"
         if: steps.appcheck.outputs.skip != 'true'
         id: c-vcrt
@@ -333,6 +345,7 @@ jobs:
           NEED_WINE: ${{ steps.c-wine.outputs.cache-hit != 'true' }}
           NEED_FREETYPE: ${{ steps.c-freetype.outputs.cache-hit != 'true' }}
           NEED_DOCK: ${{ steps.c-dock.outputs.cache-hit != 'true' }}
+          NEED_FEXEC: ${{ steps.c-fexec.outputs.cache-hit != 'true' }}
           NEED_PAIRING: ${{ steps.c-pairing.outputs.cache-hit != 'true' }}
           NEED_VCRT: ${{ steps.c-vcrt.outputs.cache-hit != 'true' }}
         run: |
@@ -359,7 +372,7 @@ jobs:
           xcrun -sdk macosx metal --version >/dev/null 2>&1 || xcodebuild -downloadComponent MetalToolchain
           xcrun -sdk macosx metal --version
 
-          if [ "$NEED_WINE" = true ] || [ "$NEED_DOCK" = true ]; then
+          if [ "$NEED_WINE" = true ] || [ "$NEED_DOCK" = true ] || [ "$NEED_FEXEC" = true ]; then
             mkdir -p toolchains
             curl -fsSL --retry 3 -o "toolchains/$MINGW.tar.xz" \
               "https://github.com/mstorsjo/llvm-mingw/releases/download/20260421/$MINGW.tar.xz"
@@ -502,6 +515,22 @@ jobs:
           path: |
             app/Madeira/arm64ec-windows/dockhost.exe
             app/Madeira/arm64ec-windows/dock-notices.txt
+
+      # The x64 emulator of 64-bit processes (FEX's ARM64EC module), built from
+      # the pinned FEX with Madeira's patches in build/fex-arm64ec/patches. It
+      # replaces the committed copy, which has none of them.
+      - name: FEX ARM64EC (xtajit64.dll)
+        if: steps.appcheck.outputs.skip != 'true' && steps.c-fexec.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          command -v ninja >/dev/null || brew install ninja
+          build/fex-arm64ec/build.sh
+      - name: "Save: FEX ARM64EC"
+        if: steps.appcheck.outputs.skip != 'true' && steps.c-fexec.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          key: ${{ steps.keys.outputs.fexec }}
+          path: app/Madeira/arm64ec-windows/xtajit64.dll
 
       - name: Visual C++ runtime
         if: steps.appcheck.outputs.skip != 'true' && steps.c-vcrt.outputs.cache-hit != 'true'

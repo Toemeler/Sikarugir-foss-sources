@@ -259,13 +259,18 @@ assert not any(line.startswith(('pso-lazy-libs', 'clear-rects'))
 # list's ec-hook reporter off; 720 lines at 30 FPS, AVX and NVIDIA left as they are.
 assert er['tested'] == ['swap-mb = 6144', 'swap-mode = 2', 'swap-min-mb = 1', 'vram-mb = 3072', 'avail-phys = 1',
                         'pso-lazy-libs = 1', 'msc-unbounded-retry = 1', 'msc-fail-memo = 1', 'pso-placeholder = 1',
-                        'quiet-log = 1', 'local-write = 1', 'env.MADEIRA_LOCK_ORPHAN = stamped', 'env.MADEIRA_EC_HOOK_TRACE = 0'], er['lines']
+                        'quiet-log = 1', 'local-write = 1', 'env.MADEIRA_LOCK_ORPHAN = stamped', 'env.MADEIRA_EC_HOOK_TRACE = 0',
+                        'env.MADEIRA_SMC_HOST_PAGE = 1'], er['lines']
 # Version 3: local-write = 1 (the Seamless Co-op launcher's WriteProcessMemory into the game), Elden Ring's only.
 assert not any(line.startswith('local-write') for p in presets.values() if p is not er for line in p['lines']), "local-write is Elden Ring's only"
 assert not any(line.startswith('clear-rects') for line in er['lines']), 'Elden Ring has no clear-rects'
 # Version 2 (owner's request, 2026-10-16): the Steam game starts PLAY MADEIRA.exe when its folder has it (less memory).
 # Version 4 (owner's request, 2026-10-16): 800x600 (4:3, as the game starts), MetalFX 2x, Fit on a 4:3 iPad.
-assert er['version'] == 4 and er['switches'] == ('wineVCRT: false, fastSync: true, fpsMode: 3, resolution: "800x600", '
+# Version 5 (owner's request, 2026-10-16): FEX traps self-modifying writes per 16 KB host page (Themida's ersc.dll),
+# Elden Ring's only: it invalidates four times the code per fault, which other games should not pay.
+assert not any(line.startswith('env.MADEIRA_SMC_HOST_PAGE') for p in presets.values() if p is not er for line in p['lines']),     "the host-page SMC switch is Elden Ring's only"
+assert (root / 'build' / 'fex-arm64ec' / 'patches' / '0001-smc-host-page.patch').is_file(), 'the FEX patch the switch needs'
+assert er['version'] == 5 and er['switches'] == ('wineVCRT: false, fastSync: true, fpsMode: 3, resolution: "800x600", '
                                                  'display: "fit", metalFXUpscale: 2, program: "PLAY MADEIRA.exe", storeAppID: 1245620'), er
 assert not any('program:' in p['switches'] for p in presets.values() if p is not er), "a program is Elden Ring's only"
 fields = block(apply_src, '    private static func takeEntryFields(', '\n    }\n')

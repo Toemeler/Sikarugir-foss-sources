@@ -1,0 +1,172 @@
+diff --git a/Source/Windows/Common/InvalidationTracker.cpp b/Source/Windows/Common/InvalidationTracker.cpp
+index 7f0ed3d..aaa820b 100644
+--- a/Source/Windows/Common/InvalidationTracker.cpp
++++ b/Source/Windows/Common/InvalidationTracker.cpp
+@@ -85,6 +85,61 @@ static bool ProtIsWritable(ULONG Prot) {
+   return (Prot & (PAGE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY)) != 0;
+ }
+ 
++#ifdef FEX_IOS_HOST
++/* MADEIRA smc-host-page: SMC TRAPS ARE ONLY AS FINE AS THE HOST PAGE.
++ *
++ * This class tracks code in FEX_PAGE_SIZE (4 KB) pages, as on Windows. The iOS host pages
++ * are 16 KB, and Wine gives each host page the UNION of its four 4 KB protections
++ * (get_host_page_vprot / mprotect_range). That breaks the trap protocol both ways:
++ *
++ *   untrap: a write fault on 4 KB page A invalidated A only, then made A writable -- and
++ *           with it the whole host page, so compiled code on its three siblings could be
++ *           overwritten with no fault and kept running stale;
++ *   trap:   compiling code on page B asked for B read-only, but a sibling still writable in
++ *           Wine's table kept the host page writable, so B was never trapped at all.
++ *
++ * A self-decrypting image (Themida: Seamless Co-op's ersc.dll, sections EXECUTE|WRITE)
++ * hits both on its first unpack and runs translations of the encrypted bytes. So on iOS
++ * the trap state is kept per host page: a trap covers every RWX piece of the host page, a
++ * write fault invalidates and untraps the whole host page, and a protection change that
++ * makes any part of a host page writable invalidates the whole host page.
++ *
++ * Opt-in, MADEIRA_SMC_HOST_PAGE=1 (a game's own settings): a host-page fault invalidates four
++ * times the code, a cost games without such images (Mono's code lives in pool aliases, whose
++ * guest pages are never made writable) should not pay. Unset or anything else: 4 KB, as before. */
++static constexpr uint64_t IosHostPageSize = 0x4000;
++
++// Latched by HandleImageMap (getenv is not safe in FEX's early init, where the constructor
++// already walks memory through HandleMemoryProtectionNotification). Nothing is compiled
++// before the first image map, so the 4 KB mode it reads until then traps nothing.
++static std::atomic<bool> IosHostPageSMCOn {false};
++
++static bool IosHostPageSMC() {
++  return IosHostPageSMCOn.load(std::memory_order_relaxed);
++}
++
++static void IosHostPageSMCLatch() {
++  static std::atomic<bool> Latched {false};
++  if (Latched.exchange(true, std::memory_order_relaxed)) {
++    return;
++  }
++  const char* Env = getenv("MADEIRA_SMC_HOST_PAGE");
++  const bool On = Env && Env[0] == '1' && !Env[1];
++  IosHostPageSMCOn.store(On, std::memory_order_relaxed);
++  LogMan::Msg::EFmt("[smc-host-page] SMC traps per {} (MADEIRA_SMC_HOST_PAGE={})", On ? "16 KB host page" : "4 KB FEX page",
++                    Env ? Env : "unset");
++}
++
++static uint64_t IosHostPageBase(uint64_t Address) {
++  return Address & ~(IosHostPageSize - 1);
++}
++
++static uint64_t IosHostPageEnd(uint64_t End) {
++  return End > std::numeric_limits<uint64_t>::max() - (IosHostPageSize - 1) ? std::numeric_limits<uint64_t>::max() :
++                                                                               (End + IosHostPageSize - 1) & ~(IosHostPageSize - 1);
++}
++#endif
++
+ void InvalidationTracker::HandleMemoryProtectionNotification(uint64_t Address, uint64_t Size, ULONG Prot) {
+   if (IntervalsLock.HeldByThisThread()) {
+     // FEX's own heap, changed while this thread holds IntervalsLock: see OwnedSharedMutex.
+@@ -93,11 +148,24 @@ void InvalidationTracker::HandleMemoryProtectionNotification(uint64_t Address, u
+   }
+   const auto AlignedBase = Address & FEXCore::Utils::FEX_PAGE_MASK;
+   const auto AlignedSize = (Address - AlignedBase + Size + FEXCore::Utils::FEX_PAGE_SIZE - 1) & FEXCore::Utils::FEX_PAGE_MASK;
++  auto InvalidateBase = AlignedBase;
++  auto InvalidateSize = AlignedSize;
+ 
+   const bool NeedsInvalidate = [&]() {
+     std::unique_lock Lock(IntervalsLock);
+ 
+     FEXCore::IntervalList<uint64_t>::Interval ProtInterval {AlignedBase, AlignedBase + AlignedSize};
++#ifdef FEX_IOS_HOST
++    // smc-host-page: a writable 4 KB page makes its whole host page writable, siblings included.
++    if (ProtIsWritable(Prot) && IosHostPageSMC()) {
++      const uint64_t HostBase = IosHostPageBase(AlignedBase);
++      const uint64_t HostEnd = IosHostPageEnd(AlignedBase + AlignedSize);
++      if (XIntervals.Intersect({HostBase, HostEnd})) {
++        InvalidateBase = HostBase;
++        InvalidateSize = HostEnd - HostBase;
++      }
++    }
++#endif
+ 
+     const bool HasExec = ProtHasExec(Prot);
+ #if !defined(ARCHITECTURE_arm64ec)
+@@ -168,12 +236,13 @@ void InvalidationTracker::HandleMemoryProtectionNotification(uint64_t Address, u
+       return true;
+     }
+ 
+-    return false;
++    // smc-host-page: a writable data page whose host page holds code of a sibling.
++    return InvalidateBase != AlignedBase || InvalidateSize != AlignedSize;
+   }();
+ 
+   if (NeedsInvalidate) {
+     // IntervalsLock cannot be held during invalidation
+-    InvalidateIntervalInternal(AlignedBase, AlignedSize);
++    InvalidateIntervalInternal(InvalidateBase, InvalidateSize);
+   }
+ }
+ 
+@@ -251,6 +320,9 @@ void InvalidationTracker::HandleProcessExecuteFlagsChange(ULONG Flags) {
+ }
+ 
+ void InvalidationTracker::HandleImageMap(std::string_view Name, uint64_t Address) {
++#ifdef FEX_IOS_HOST
++  IosHostPageSMCLatch();
++#endif
+   auto* Nt = RtlImageNtHeader(reinterpret_cast<HMODULE>(Address));
+   auto* SectionsBegin = IMAGE_FIRST_SECTION(Nt);
+   auto* SectionsEnd = SectionsBegin + Nt->FileHeader.NumberOfSections;
+@@ -523,13 +595,32 @@ bool InvalidationTracker::HandleRWXAccessViolation(FEXCore::Core::InternalThread
+     {
+       std::scoped_lock Lock(CTX.GetCodeInvalidationMutex());
+ 
+-      InvalidateIntervalInternalLocked(FaultAddress & FEXCore::Utils::FEX_PAGE_MASK, FEXCore::Utils::FEX_PAGE_SIZE);
++#ifdef FEX_IOS_HOST
++      bool HostPageUntrapped = false;
++      if (IosHostPageSMC()) {
++        // smc-host-page: the untrap makes the whole host page writable, so drop the code of
++        // all of it, then untrap every RWX piece of it (ProtectRWXIntervalsInternal does both).
++        const uint64_t HostBase = IosHostPageBase(FaultAddress);
++        static std::atomic<uint64_t> HostPageFaults {0};
++        const uint64_t N = HostPageFaults.fetch_add(1, std::memory_order_relaxed) + 1;
++        if (N <= 16 || (N % 4096) == 0) {
++          LogMan::Msg::EFmt("[smc-host-page] #{} write {:#x}: invalidating and untrapping host page {:#x}-{:#x}", N, FaultAddress,
++                            HostBase, HostBase + IosHostPageSize);
++        }
++        // False only when SMC detection was disabled meanwhile: then the 4 KB untrap below runs.
++        HostPageUntrapped = ProtectRWXIntervalsInternal(HostBase, IosHostPageSize, true);
++      }
++      if (!HostPageUntrapped)
++#endif
++      {
++        InvalidateIntervalInternalLocked(FaultAddress & FEXCore::Utils::FEX_PAGE_MASK, FEXCore::Utils::FEX_PAGE_SIZE);
+ 
+-      // Invalidate, then unprotect the faulting page with the compilation lock held to ensure that any racing invalidations are not dropped.
+-      ULONG TmpProt;
+-      void* TmpAddress = reinterpret_cast<void*>(FaultAddress);
+-      SIZE_T TmpSize = 1;
+-      NtProtectVirtualMemory(NtCurrentProcess(), &TmpAddress, &TmpSize, UntrapProt, &TmpProt);
++        // Invalidate, then unprotect the faulting page with the compilation lock held to ensure that any racing invalidations are not dropped.
++        ULONG TmpProt;
++        void* TmpAddress = reinterpret_cast<void*>(FaultAddress);
++        SIZE_T TmpSize = 1;
++        NtProtectVirtualMemory(NtCurrentProcess(), &TmpAddress, &TmpSize, UntrapProt, &TmpProt);
++      }
+     }
+     DetectMonoBackpatcherBlock(Thread, HostPc);
+     return true;
+@@ -832,6 +923,15 @@ void InvalidationTracker::InvalidateIntervalInternalLocked(uint64_t Address, uin
+ }
+ 
+ bool InvalidationTracker::ProtectRWXIntervalsInternal(uint64_t Address, uint64_t Size, bool ForWriteLocked) {
++#ifdef FEX_IOS_HOST
++  if (IosHostPageSMC()) {
++    // smc-host-page: trap and untrap whole host pages. A trap of only the compiled 4 KB is
++    // undone by a writable sibling (Wine applies the union), an untrap of 4 KB opens all 16.
++    const uint64_t HostEnd = IosHostPageEnd(Address + Size);
++    Address = IosHostPageBase(Address);
++    Size = HostEnd - Address;
++  }
++#endif
+   const auto End = Address + Size;
+   std::shared_lock Lock(IntervalsLock);
+ 
