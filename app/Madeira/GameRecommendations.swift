@@ -574,12 +574,13 @@ enum GameRecommendations {
     /// fourth 512 MB block found no gap while the arena was 37% used. Version 4
     /// (2026-10-16): arena-lend-keep-mb = 768 lets such a block use the arena's free
     /// space when nothing else fits, as long as 768 MB stay free for the emulator,
-    /// and Raft.exe also gets a 256 KB background job temp allocator block: Unity
-    /// says that allocator reserves up to 512 blocks, 512 MB at its 1 MB default,
-    /// the size of the blocks it kept reserving (a reserve of ~128 MB in the log
-    /// confirms it was that allocator).
+    /// Version 5 (2026-10-16): Raft.exe gets -systemallocator instead of version 4's
+    /// background job allocator block size. Every DynamicHeapAllocator in this
+    /// UnityPlayer.dll reserves its own 256 MB region with 256 MB of alignment slack
+    /// (the 0x1ffff000 reserves); no memorysetup key changes that size, and
+    /// -systemallocator (read from the command line only) makes them plain malloc.
     static let raft = GameRecommendation(
-        id: "raft", title: "Raft", version: 4,
+        id: "raft", title: "Raft", version: 5,
         config: """
         # Madeira's recommended settings for Raft (an 8 GB iPad; not device-tested yet).
         # Reset to Recommended, at the bottom of the game's settings, brings them back.
@@ -592,7 +593,7 @@ enum GameRecommendations {
         arena-lend-keep-mb = 768
         env.MADEIRA_LOCK_ORPHAN = stamped
         env.MADEIRA_EC_HOOK_TRACE = 0
-        env.MADEIRA_CHILD_ARGS = Raft.exe -job-worker-count 2 -force-gfx-direct -memorysetup-job-temp-allocator-block-size-background=262144
+        env.MADEIRA_CHILD_ARGS = Raft.exe -job-worker-count 2 -force-gfx-direct -systemallocator
         """,
         wineVCRT: false, fastSync: true, fpsMode: 3, resolution: GameRecommendation.screen720, display: "fit")
 
