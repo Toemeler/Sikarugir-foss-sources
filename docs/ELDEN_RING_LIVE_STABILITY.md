@@ -89,3 +89,29 @@ hashes. Their size rises from 110818176 to 420600400 bytes. Every device upload
 is read back and hashed. The experiment must be activated and timed separately;
 less decompression work is a hypothesis, not a measured iPad speedup. Original
 packs, saves and ERSC files remain intact.
+
+The stored-stream experiment is activated in a separate YAFSML mod entry. Its
+runtime log confirms reads of the stored common-effects archives and body
+texture. The owner reports immediate controller response and acceptable
+menu-to-world loading, but a very slow first menu and large movement drops.
+Five-second presentation windows still fall to 3.8-16.2/s with low GPU use. No
+sustained real-30-FPS result is established by this experiment.
+
+Quitting build 37 to desktop terminates the guest at 20:01:04 with C0000005,
+leaving the Wine desktop. Exact x86 instruction inspection identifies a
+deliberate Dantelion panic at eldenring.exe+0x1eb9999, whose format string reports
+access to an uninitialized singleton. This is distinct from the earlier native
+Metal buffer lifetime crash; bypassing the panic is not a correction. The
+responsible singleton and teardown ordering remain unproven.
+
+Build 40 packages the overlay attachment correction (31a83ac); its Xcode build
+and release job pass, while the separate Pages publication job fails. The IPA
+is checked against the published digest, checked for the native overlay marker,
+and copied with full USB readback verification. Its device validation is pending.
+
+The next startup experiment enables the previously disabled YAFSML BootBoost
+header cache. Five exact v0.10.4-format cache files are precomputed from freshly
+decoded current PC BHDs, with the complete encrypted-header XXH3-128 source key,
+raw Deflate body and decoded-header checksum. Device source hashes must match
+before copying or enabling them. A 5 MB prepared cache is not evidence of a
+startup improvement until the device log records cache hits and a timed menu.
