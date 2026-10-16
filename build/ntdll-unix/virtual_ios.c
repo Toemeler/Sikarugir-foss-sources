@@ -32503,6 +32503,59 @@ static BOOL ios_ucrt_shadow_refused( HANDLE handle, const struct pe_image_info *
     return ret;
 }
 
+/* madeira-oodle: on iOS load_builtin() keeps the first PE found, even for
+ * WINEDLLOVERRIDES=name=b. An app-local x64 Oodle would therefore shadow the
+ * optional native ARM64EC builtin in system32. Reuse the UCRT shadow mechanism
+ * only when this game explicitly opts in with MADEIRA_OODLE_NATIVE=1. The
+ * bundled hybrid and the original copied under madeira-oo2core6-*.dll are
+ * exempt, so fallback never routes back into the builtin. No file is changed. */
+static BOOL ios_oodle_native_shadow_refused( HANDLE handle, const struct pe_image_info *pi )
+{
+    extern int ios_is_arm64ec_cur(void);
+    static const char oodle[] = "oo2core_6_win64.dll";
+    static int logged;
+    const char *enabled;
+    struct pe_image_info *info = NULL;
+    unsigned int sec_flags;
+    mem_size_t full_size;
+    HANDLE shared_file = 0;
+    UNICODE_STRING nt_name;
+    ANSI_STRING exp_name;
+    const WCHAR *name;
+    USHORT len, i;
+    BOOL ret = FALSE;
+
+    if (pi->machine != IMAGE_FILE_MACHINE_AMD64 || pi->is_hybrid || pi->wine_builtin) return FALSE;
+    if (!ios_is_arm64ec_cur()) return FALSE;
+    enabled = getenv( "MADEIRA_OODLE_NATIVE" );
+    if (!enabled || enabled[0] != '1' || enabled[1]) return FALSE;
+    memset( &nt_name, 0, sizeof(nt_name) );
+    if (get_mapping_info( handle, SECTION_QUERY, &sec_flags, &full_size, &shared_file,
+                          &info, &nt_name, &exp_name )) return FALSE;
+    if (shared_file) NtClose( shared_file );
+    if (!info) return FALSE;
+    len = nt_name.Length / sizeof(WCHAR);
+    name = nt_name.Buffer;
+    for (i = 0; i < len; i++)
+        if (nt_name.Buffer[i] == '\\' || nt_name.Buffer[i] == '/') name = nt_name.Buffer + i + 1;
+    if (name) len -= name - nt_name.Buffer;
+    if (name && len == sizeof(oodle) - 1)
+    {
+        for (i = 0; i < len; i++)
+        {
+            WCHAR c = name[i];
+            if (c >= 'A' && c <= 'Z') c += 'a' - 'A';
+            if (c != (WCHAR)oodle[i]) break;
+        }
+        ret = i == len;
+        if (ret && logged++ < 8)
+            dprintf( 2, "[oodle-native] routing %s past the app-local x64 DLL to the bundled "
+                        "ARM64EC decoder (MADEIRA_OODLE_NATIVE=1)\n", debugstr_us(&nt_name) );
+    }
+    free( info );
+    return ret;
+}
+
 /******************************************************************************
  *             NtQuerySection   (NTDLL.@)
  *             ZwQuerySection   (NTDLL.@)
@@ -32556,7 +32609,8 @@ NTSTATUS WINAPI NtQuerySection( HANDLE handle, SECTION_INFORMATION_CLASS class, 
     SERVER_END_REQ;
 
     /* outside the request block: the helper makes its own server call */
-    if (!status && is_image && ios_ucrt_shadow_refused( handle, &image_info ))
+    if (!status && is_image && (ios_ucrt_shadow_refused( handle, &image_info ) ||
+                               ios_oodle_native_shadow_refused( handle, &image_info )))
         ((SECTION_IMAGE_INFORMATION *)ptr)->Machine = IMAGE_FILE_MACHINE_UNKNOWN;
 
     return status;

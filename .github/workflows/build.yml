@@ -132,7 +132,7 @@ jobs:
           # pinned submodule commits and this workflow's own scripts. A README
           # or feed edit deliberately does not force a rebuild.
           STAMP=$( {
-            for p in app build madeira-d3d12 FEX wine dxmt madeira-dock; do
+            for p in app build madeira-d3d12 madeira-oodle FEX wine dxmt madeira-dock; do
               git rev-parse "HEAD:$p"
             done
             git rev-parse HEAD:.github/scripts HEAD:.github/workflows
@@ -502,6 +502,18 @@ jobs:
           cp build/madeira-d3d12/out-pe/d3d12.dll app/Madeira/arm64ec-windows/d3d12.dll
           cp build/madeira-d3d12/out-pe/madeira_d3d12.dll app/Madeira/arm64ec-windows/madeira_d3d12.dll
 
+      # madeira-oodle: a native oo2core_6_win64.dll (Wine builtin), loaded only by a game
+      # config whose WINEDLLOVERRIDES has oo2core_6_win64=b. Validate the actual
+      # decoder before packaging; an IPA without it must not be published.
+      - name: Native Oodle decoder (ARM64EC)
+        if: steps.appcheck.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          python3 tests/host/check-oodle-native.py --sanitize
+          build/madeira-oodle/build-pe.sh
+          cp build/madeira-oodle/out-pe/oo2core_6_win64.dll app/Madeira/arm64ec-windows/oo2core_6_win64.dll
+          cp build/madeira-oodle/out-pe/oodle-notices.txt app/Madeira/arm64ec-windows/oodle-notices.txt
+
       - name: In-app pairing
         if: steps.appcheck.outputs.skip != 'true' && steps.c-pairing.outputs.cache-hit != 'true'
         run: build/rppairing-ios/build.sh
@@ -599,6 +611,8 @@ jobs:
           set -euo pipefail
           .github/scripts/package_ipa.sh build/xcode/Debug-iphoneos/Madeira.app \
             app/Madeira/Madeira.entitlements Madeira.ipa
+          python3 tests/host/check-oodle-pe.py --ipa Madeira.ipa \
+            --source build/madeira-oodle/out-pe/oo2core_6_win64.dll
           echo "size=$(stat -f%z Madeira.ipa)" >> "$GITHUB_OUTPUT"
           echo "sha256=$(shasum -a 256 Madeira.ipa | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
           echo "human_size=$(ls -lh Madeira.ipa | awk '{print $5}')" >> "$GITHUB_OUTPUT"

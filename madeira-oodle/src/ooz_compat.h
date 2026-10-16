@@ -26,7 +26,9 @@ typedef unsigned short uint16;
 typedef signed short int16;
 typedef unsigned int uint;
 
+#ifndef __forceinline
 #define __forceinline inline __attribute__((always_inline))
+#endif
 
 /* _BitScanReverse/_BitScanForward: kraken.cpp declares the index as unsigned
  * long; macros keep that working whatever unsigned long's width is. */
@@ -35,16 +37,22 @@ typedef unsigned int uint;
 #define _BitScanForward(pidx, x) \
     ((uint32)(x) ? (*(pidx) = __builtin_ctz((uint32)(x)), (unsigned char)1) : (unsigned char)0)
 
-static inline uint32 _byteswap_ulong(uint32 v) { return __builtin_bswap32(v); }
-static inline uint64 _byteswap_uint64(uint64 v) { return __builtin_bswap64(v); }
-static inline uint16 _byteswap_ushort(uint16 v) { return __builtin_bswap16(v); }
-static inline uint32 _rotl(uint32 v, int n) {
+/* MinGW's stdlib already declares these names. Macros avoid redeclaring CRT
+ * functions with static linkage and preserve the original decoder's spelling. */
+#define _byteswap_ulong(v) __builtin_bswap32((uint32)(v))
+#define _byteswap_uint64(v) __builtin_bswap64((uint64)(v))
+#define _byteswap_ushort(v) __builtin_bswap16((uint16)(v))
+static inline uint32 madeira_rotl(uint32 v, int n) {
     n &= 31;
     return n ? (v << n) | (v >> (32 - n)) : v;
 }
+#define _rotl(v, n) madeira_rotl((uint32)(v), (n))
 
 /* SSE2 subset. __m128i/__m128 are the same 16 bytes; __m64 only names the
  * destination of _mm_storeh_pi. */
+#ifdef MADEIRA_OOZ_X86_REFERENCE_SSE
+#include <emmintrin.h>
+#else
 typedef struct { uint8 b[16]; } __m128i;
 typedef __m128i __m128;
 typedef struct { uint8 b[8]; } __m64;
@@ -98,3 +106,4 @@ static inline __m128i _mm_shuffle_epi32(__m128i a, int imm) {
     return r;
 }
 #define _mm_prefetch(p, hint) __builtin_prefetch((const void *)(p))
+#endif

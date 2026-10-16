@@ -91,20 +91,39 @@ Remaining cause (measured): moving into a new area stalls 5-20 s while the game 
 streaming chain (one Oodle decompression thread at 50-98%, loading and character set-up threads), all
 emulated; the CPU is 2-2.5 of 9 cores busy, the disk idle.
 
-## Next step: a native Oodle decoder (in progress)
+## Native Oodle decoder integration (17 October)
 
-`madeira-oodle/src/ooz_compat.h` gives ooz's kraken.cpp (GPL-3.0-or-later, github.com/powzix/ooz)
-the x86 intrinsics it uses with exact semantics on ARM64. Plan:
+The native ARM64EC Wine builtin is now integrated on the
+`codex/elden-ring-native-oodle-20261017` branch. It preserves the original game
+DLL and loads a uniquely named temporary copy for unsupported calls and the
+other five exports. Enable both `env.MADEIRA_OODLE_NATIVE = 1` and append
+`;oo2core_6_win64=b` to the existing WINEDLLOVERRIDES value (keep `dinput8=n,b`).
+The loader opt-in is necessary: on iOS the app-local x64 DLL otherwise shadows
+the bundled builtin even with the override set.
 
-1. Vendor ooz `kraken.cpp` lines 1-4151 as `madeira-oodle/src/kraken.cpp` (include `ooz_compat.h`;
-   stub LZNA/BitKnit to fail) plus a whole-buffer decode that accepts trailing input.
-2. `oo2core_6_win64.dll` (ARM64EC, llvm-mingw like build/madeira-d3d12/build-pe.sh, "Wine builtin DLL"
-   written at 0x40): `OodleLZ_Decompress` decodes natively into its own buffer (ooz writes up to 64
-   bytes past the end) and copies; decBufBase != rawBuf, threadPhase != 3, a callback or any failure
-   goes to the original, loaded from a temp copy of the game's DLL under another name. The other five
-   imports (Compress, GetCompressedBufferSizeNeeded, CompressOptions_GetDefault,
-   GetCompressedStepForRawStep, LZDecoder_MemorySizeNeeded) forward to that copy.
-3. Game config: `env.WINEDLLOVERRIDES = dinput8=n,b;oo2core_6_win64=b` (dinput8 must stay).
-4. Host check: build kraken.cpp natively on the macOS runner and decode `tests/host/data/oodle/*.oz`
-   (52 streams made by the game's own DLL with `tests/host/gen-oodle-vectors.py`; manifest has sizes
-   and SHA-256) before shipping.
+Two bugs in the initial port were corrected before packaging: independent
+256 KiB seek chunks now reset their dictionary/seed-byte origin, and Clang SLP
+vectorization is disabled because widening sequential overlapping 8-byte match
+copies corrupts Leviathan output. Normal loop vectorization remains enabled.
+
+Validation includes 56 original-DLL-verified fixtures, exact/trailing input,
+padding guards and bounded rejection cases under O2 and AddressSanitizer;
+13,480,192 bytes of portable-intrinsic output checked against real SSE2; the
+six-export/14-argument Windows wrapper with concurrent initialization and
+fallback; and 26 loader-routing checks. ARM64EC exports, CHPE redirects and the
+Wine builtin marker are checked again inside the final IPA. Decoder failure is
+fatal to the build rather than silently shipping an IPA without it.
+
+These are host checks. Native invocation, load-time improvement, sustained
+movement FPS and crash behavior still require measurements on the iPad. This
+change does not itself prove sustained 30 FPS. See `madeira-oodle/README.md`
+for activation and rollback.
+
+The upstream decoder is ooz `kraken.cpp`, GPL-3.0-or-later, pinned at
+05038060aa68f9187ae9923b2388ca8db40e58d1. `ooz_compat.h` supplies the required
+x86-intrinsic semantics on ARM64. The original decoder is never redistributed.
+Native buffers have 64 bytes of private padding; only the requested decoded
+bytes are copied into the game's buffer. Checksummed streams, unsupported
+codecs, history-window calls, threaded phases, callbacks and native failures
+use the original implementation. The wrapper's six exports match the imports
+used by this game; this is not a full replacement for every Oodle API.

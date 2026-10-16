@@ -258,5 +258,33 @@
   "file": "mixed5m.kraken8.oz",
   "raw_size": 5242880,
   "raw_sha256": "3d44ee749fe71cf9e99123477ea81a6d63e1ba86be0039afb780cedca200a341"
+ },
+ {
+  "file": "independent-seek-786449.kraken4.oz",
+  "raw_size": 786449,
+  "raw_sha256": "70bc76bcf4892f171330383189ce7fbaf6a09f439250438b753b9f884504fe4d",
+  "seek_chunk_reset": true,
+  "seek_chunk_size": 262144
+ },
+ {
+  "file": "independent-seek-786449.mermaid4.oz",
+  "raw_size": 786449,
+  "raw_sha256": "70bc76bcf4892f171330383189ce7fbaf6a09f439250438b753b9f884504fe4d",
+  "seek_chunk_reset": true,
+  "seek_chunk_size": 262144
+ },
+ {
+  "file": "independent-seek-786449.selkie4.oz",
+  "raw_size": 786449,
+  "raw_sha256": "70bc76bcf4892f171330383189ce7fbaf6a09f439250438b753b9f884504fe4d",
+  "seek_chunk_reset": true,
+  "seek_chunk_size": 262144
+ },
+ {
+  "file": "independent-seek-786449.leviathan6.oz",
+  "raw_size": 786449,
+  "raw_sha256": "70bc76bcf4892f171330383189ce7fbaf6a09f439250438b753b9f884504fe4d",
+  "seek_chunk_reset": true,
+  "seek_chunk_size": 262144
  }
 ]

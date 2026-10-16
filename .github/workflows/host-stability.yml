@@ -2,7 +2,7 @@ name: Host stability checks
 on:
   workflow_dispatch:
   push:
-    branches: [codex/elden-ring-live-stability-20261016]
+    branches: [codex/elden-ring-live-stability-20261016, codex/elden-ring-native-oodle-20261017]
 permissions:
   contents: read
 jobs:
@@ -11,7 +11,42 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+      - name: Native Oodle decoder against the game's own DLL's streams (O2 and ASan)
+        run: python3 tests/host/check-oodle-native.py --sanitize
+      - name: Native Oodle loader opt-in and original fallback routing
+        run: python3 tests/host/check-oodle-routing.py
       - name: Active-root resource lifetime under sanitizers
         run: python3 tests/host/check-root-residency.py --sanitize
       - name: Recommended controller mode and persistence
         run: python3 tests/host/check-game-recommendations.py --require-swift
+  windows-oodle:
+    name: Oodle Windows ABI and portable intrinsics
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      MINGW_NAME: llvm-mingw-20260421-ucrt-x86_64
+      MINGW_SHA256: 0c47b9fc1043b68a8d7e8e022b878f11306ed35beacf858864b36b096a0acd95
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pinned LLVM-MinGW toolchain
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $archive = Join-Path $env:RUNNER_TEMP ($env:MINGW_NAME + '.zip')
+          $url = 'https://github.com/mstorsjo/llvm-mingw/releases/download/20260421/' + $env:MINGW_NAME + '.zip'
+          Invoke-WebRequest -Uri $url -OutFile $archive
+          $actual = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $env:MINGW_SHA256) { throw 'LLVM-MinGW archive checksum mismatch' }
+          Expand-Archive -LiteralPath $archive -DestinationPath toolchains
+      - name: Windows export ABI, native isolation and fallback
+        shell: pwsh
+        run: python tests/host/check-oodle-shim.py --compiler "toolchains/$env:MINGW_NAME/bin/x86_64-w64-mingw32-clang++.exe"
+      - name: Portable intrinsics against x86 SSE2
+        shell: pwsh
+        run: python tests/host/check-oodle-intrinsics.py --compiler "toolchains/$env:MINGW_NAME/bin/x86_64-w64-mingw32-clang++.exe"
+      - name: ARM64EC compile and builtin exports
+        shell: bash
+        run: |
+          set -euo pipefail
+          export MINGW_BIN="$GITHUB_WORKSPACE/toolchains/$MINGW_NAME/bin"
+          build/madeira-oodle/build-pe.sh

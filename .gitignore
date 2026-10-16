@@ -27,6 +27,7 @@ build/xcode-derived/
 FEX/build-ios/
 build/ntdll-unix/obj/
 build/wineserver/obj/
+build/madeira-oodle/out*/
 
 # Compiled libraries (rebuilt from build scripts)
 app/Madeira/libntdll_unix.a

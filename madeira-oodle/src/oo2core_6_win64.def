@@ -1,0 +1,8 @@
+LIBRARY oo2core_6_win64.dll
+EXPORTS
+  OodleLZ_Compress
+  OodleLZ_Decompress
+  OodleLZ_GetCompressedBufferSizeNeeded
+  OodleLZ_CompressOptions_GetDefault
+  OodleLZ_GetCompressedStepForRawStep
+  OodleLZDecoder_MemorySizeNeeded
