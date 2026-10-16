@@ -22156,6 +22156,124 @@ static BOOL ios_subfloor_window_held( ULONG_PTR low, ULONG_PTR real )
 }
 
 
+#ifdef WINE_IOS
+/* madeira-bcd exe-patch: env MADEIRA_EXE_PATCH = "<exe>:<hex pattern>:<offset>:<hex bytes>"
+ * (several separated by ';') patches the named image in memory while it is mapped,
+ * after relocation and before any of its code can run. The pattern must occur
+ * exactly once in the image's executable sections, else nothing is written; the
+ * file on disk is never touched. Opt-in per game (a game config's env line).
+ * Elden Ring 1.16.2: eldenring.exe:744f458b94cc:0:eb makes the jump that fits the
+ * 3D view into 16:9 unconditional (er-patcher's ultrawide byte at rva 0x19ebbee),
+ * so the game fills its whole back buffer: a true 4:3 picture at 800x600. */
+static int ios_exe_patch_hex( const char *s, unsigned char *out, int cap )
+{
+    int n = (int)strlen( s ), i;
+    if (!n || (n & 1) || n / 2 > cap) return -1;
+    for (i = 0; i < n; i++)
+    {
+        char c = s[i];
+        int v;
+        if (c >= '0' && c <= '9') v = c - '0';
+        else if (c >= 'a' && c <= 'f') v = c - 'a' + 10;
+        else if (c >= 'A' && c <= 'F') v = c - 'A' + 10;
+        else return -1;
+        if (i & 1) out[i / 2] |= (unsigned char)v;
+        else out[i / 2] = (unsigned char)(v << 4);
+    }
+    return n / 2;
+}
+
+static void ios_exe_patch( char *base, SIZE_T total_size, const IMAGE_NT_HEADERS *nt,
+                           const IMAGE_SECTION_HEADER *sec, const UNICODE_STRING *nt_name )
+{
+    const char *env = getenv( "MADEIRA_EXE_PATCH" ), *p;
+    char name[64];
+    int nlen = 0, len, start, i;
+
+    if (!env || !*env || !nt_name || !nt_name->Buffer) return;
+    len = nt_name->Length / sizeof(WCHAR);
+    start = len;
+    while (start > 0 && nt_name->Buffer[start - 1] != '\' && nt_name->Buffer[start - 1] != '/') start--;
+    for (i = start; i < len && nlen < (int)sizeof(name) - 1; i++)
+    {
+        WCHAR c = nt_name->Buffer[i];
+        name[nlen++] = c < 128 ? (char)c : '?';
+    }
+    name[nlen] = 0;
+
+    for (p = env; *p; )
+    {
+        const char *end = strchr( p, ';' );
+        char ent[320], *fld[4], *colon;
+        unsigned char pat[64], rep[64];
+        int npat, nrep, nfld, hits = 0;
+        long off;
+        char *hit = NULL;
+        size_t elen;
+
+        if (!end) end = p + strlen( p );
+        elen = end - p;
+        if (elen && elen < sizeof(ent))
+        {
+            memcpy( ent, p, elen );
+            ent[elen] = 0;
+            fld[0] = ent;
+            for (nfld = 1; nfld < 4; nfld++)
+            {
+                if (!(colon = strchr( fld[nfld - 1], ':' ))) break;
+                *colon = 0;
+                fld[nfld] = colon + 1;
+            }
+            if (nfld == 4 && !strcasecmp( fld[0], name ))
+            {
+                npat = ios_exe_patch_hex( fld[1], pat, sizeof(pat) );
+                nrep = ios_exe_patch_hex( fld[3], rep, sizeof(rep) );
+                off = strtol( fld[2], NULL, 0 );
+                if (npat <= 0 || nrep <= 0 || off < 0 || off + nrep > npat)
+                    dprintf( 2, "[exe-patch] %s: '%s' is not <exe>:<hex pattern>:<offset>:<hex bytes> inside the pattern; nothing written\n",
+                             name, p );
+                else
+                {
+                    for (i = 0; i < nt->FileHeader.NumberOfSections; i++)
+                    {
+                        SIZE_T sz = sec[i].SizeOfRawData;
+                        char *s, *e;
+                        if (!(sec[i].Characteristics & IMAGE_SCN_MEM_EXECUTE)) continue;
+                        if (sec[i].Misc.VirtualSize && sec[i].Misc.VirtualSize < sz) sz = sec[i].Misc.VirtualSize;
+                        if ((SIZE_T)sec[i].VirtualAddress >= total_size) continue;
+                        if (sz > total_size - sec[i].VirtualAddress) sz = total_size - sec[i].VirtualAddress;
+                        s = base + sec[i].VirtualAddress;
+                        e = s + sz;
+                        while (e - s >= npat)
+                        {
+                            char *m = memchr( s, pat[0], (e - s) - npat + 1 );
+                            if (!m) break;
+                            if (!memcmp( m, pat, npat )) { hits++; hit = m; }
+                            s = m + 1;
+                        }
+                    }
+                    if (hits == 1)
+                    {
+                        char *pg = (char *)((UINT_PTR)(hit + off) & ~host_page_mask);
+                        SIZE_T pglen = ((UINT_PTR)(hit + off + nrep) - (UINT_PTR)pg + host_page_mask) & ~host_page_mask;
+                        int rc = mprotect( pg, pglen, PROT_READ | PROT_WRITE );
+                        if (!rc) memcpy( hit + off, rep, nrep );
+                        dprintf( 2, "[exe-patch] %s: pattern %s found once at rva %#lx: %s %d byte(s) at +%ld (MADEIRA_EXE_PATCH)\n",
+                                 name, fld[1], (unsigned long)(hit - base), rc ? "mprotect failed, NOT written" : "wrote",
+                                 nrep, off );
+                    }
+                    else
+                        dprintf( 2, "[exe-patch] %s: pattern %s found %d times in the executable sections: nothing written\n",
+                                 name, fld[1], hits );
+                }
+            }
+        }
+        p = *end ? end + 1 : end;
+    }
+}
+#endif
+
+
 /***********************************************************************
  *           map_image_into_view
  *
@@ -22513,6 +22631,10 @@ static NTSTATUS map_image_into_view( struct file_view *view, const UNICODE_STRIN
                  "%p (preferred %#llx): ImageBase rewritten, nothing relocated\n",
                  ptr, (unsigned long long)image_info->base );
     }
+#endif
+
+#ifdef WINE_IOS
+    ios_exe_patch( ptr, total_size, nt, sec, nt_name );   /* madeira-bcd exe-patch: relocated, nothing has run */
 #endif
 
 #ifdef WINE_IOS
