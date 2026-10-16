@@ -62,3 +62,30 @@ also compile the real recommendation/apply code with the Swift fixture.
 These are candidate runtime changes until a freshly installed build completes
 moving gameplay, combat, inventory, map and a 10-15 minute outdoor test. The
 mixed menu/loading/live trace is not a valid sustained-gameplay FPS result.
+
+## Build 37 follow-up and overlay attachment
+
+Build 37 is installed and its launch log confirms the saved keyboard/mouse
+controller route, direct executable, 800x600 and 6144 MiB process limit. The
+owner reports that the world loads, but startup/transitions remain slow and
+movement still stalls. The controller temporarily appears unresponsive and
+then works again without changing its mapping. This is not proof of a resolved
+input lifecycle issue. GPU lifetime validation remains incomplete.
+
+During this run the AirPlay feed shows the HUD on a black 3840x2160 surface
+while the owner can see the world but cannot find the menu. Reconnecting the
+mirror restores a 2880x2160 world picture without the HUD. The controls host
+selects an arbitrary connected scene and never moves its existing window when
+the game moves. Bind it to the actual Metal placeholder's window, reattach it
+on window changes, and claim controller events in its UIKit and SwiftUI roots
+as the game view already does. This corrects the concrete scene-selection path;
+on-device menu and controller behavior still need retesting.
+
+A separate disk-cache experiment preserves the optimized asset payloads and
+DCX/Kraken envelopes but stores the Kraken data without entropy compression,
+using independent 256 KiB chunks. All 1988 staged files decode through both
+the game's Oodle v6 DLL and SoulsFormats to the original optimized payload
+hashes. Their size rises from 110818176 to 420600400 bytes. Every device upload
+is read back and hashed. The experiment must be activated and timed separately;
+less decompression work is a hypothesis, not a measured iPad speedup. Original
+packs, saves and ERSC files remain intact.

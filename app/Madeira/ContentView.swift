@@ -278,6 +278,9 @@ final class MetalBackedView: UIView {
             host.removeFromSuperview()
             w.addSubview(host)
         }
+        // The HUD belongs to this game's window. A capture/display reconnect
+        // can leave the process-lifetime controls window in an earlier scene.
+        TouchControlsHost.attach(to: w)
         applyDisplayMode(reason: "attach")
         // S2 desktop mode: the winios compositor renders the wine virtual
         // desktop aspect-fit inside THIS placeholder's area, exactly like
@@ -4060,9 +4063,11 @@ final class ControlsWindow: UIWindow {
 enum TouchControlsHost {
     private static var window: ControlsWindow?
 
-    static func attach() {
+    static func attach(to gameWindow: UIWindow? = nil) {
         let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-        guard let scene = scenes.first(where: { $0.activationState == .foregroundActive })
+        let surfaceWindow = gameWindow ?? MetalBackedView.keyboardTarget?.window ?? MetalHostView.shared.window
+        guard let scene = surfaceWindow?.windowScene
+                        ?? scenes.first(where: { $0.activationState == .foregroundActive })
                         ?? scenes.first else { return }
         if window == nil {
             // ml644: orientationDidChangeNotification is NOT posted unless
@@ -4077,8 +4082,13 @@ enum TouchControlsHost {
             w.isHidden = false        // deliberately never made key
             let host = UIHostingController(rootView: TouchControlsOverlay())
             host.view.backgroundColor = .clear
+            GamepadEventClaim.install(on: host.view)
             w.rootViewController = host
             window = w
+        }
+        if window?.windowScene !== scene {
+            window?.windowScene = scene
+            fputs("[controls] moved overlay to the game scene\n", stderr)
         }
         window?.frame = scene.coordinateSpace.bounds
         fputs("[controls] ml644 overlay attached frame=\(window?.frame ?? .zero) " +
@@ -4122,6 +4132,7 @@ struct TouchControlsOverlay: View {
             .onDisappear { GamepadInput.shared.configureTouch(controls: []); TouchMouseGate.padOverlay = false }
         }
         .ignoresSafeArea()
+        .modifier(ClaimGamepadEvents())
     }
 
     /// Every control in ONE GlassEffectContainer: on iOS 26 the system merges
