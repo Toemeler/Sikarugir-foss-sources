@@ -1,1 +1,2 @@
 app/Frameworks/StikJIT.xcframework/** -whitespace
+tests/host/data/oodle/** binary
