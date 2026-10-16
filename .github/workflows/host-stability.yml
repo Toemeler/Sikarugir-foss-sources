@@ -1,0 +1,17 @@
+name: Host stability checks
+on:
+  workflow_dispatch:
+  push:
+    branches: [codex/elden-ring-live-stability-20261016]
+permissions:
+  contents: read
+jobs:
+  host:
+    runs-on: macos-26
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Active-root resource lifetime under sanitizers
+        run: python3 tests/host/check-root-residency.py --sanitize
+      - name: Recommended controller mode and persistence
+        run: python3 tests/host/check-game-recommendations.py --require-swift

@@ -272,11 +272,14 @@ assert not any(line.startswith('env.MADEIRA_SMC_HOST_PAGE') for p in presets.val
 assert (root / 'build' / 'fex-arm64ec' / 'patches' / '0001-smc-host-page.patch').is_file(), 'the FEX patch the switch needs'
 # Version 6 (owner's request, 2026-10-16): 960x540 and Fill. The game draws 16:9 in any window (800x452 with
 # bars at 800x600), so a 16:9 monitor filled to the 4:3 iPad has no bars and no distortion.
-assert er['version'] == 6 and er['switches'] == ('wineVCRT: false, fastSync: true, fpsMode: 3, resolution: "960x540", '
-                                                 'display: "fill", metalFXUpscale: 2, program: "PLAY MADEIRA.exe", storeAppID: 1245620'), er
+# Version 7: owner-confirmed physical controller input through keyboard and mouse.
+assert er['version'] == 7 and er['switches'] == ('wineVCRT: false, fastSync: true, fpsMode: 3, resolution: "960x540", '
+                                                 'display: "fill", metalFXUpscale: 2, controllerMode: "keys", program: "PLAY MADEIRA.exe", storeAppID: 1245620'), er
+assert not any('controllerMode:' in p['switches'] for p in presets.values() if p is not er), "other games keep their controller mode"
 assert not any('program:' in p['switches'] for p in presets.values() if p is not er), "a program is Elden Ring's only"
 fields = block(apply_src, '    private static func takeEntryFields(', '\n    }\n')
 assert 'if let program = rec.program { entry.takeRecommendedProgram(program) }' in fields
+assert 'if let mode = rec.controllerMode { entry.controllerMode = mode }' in fields
 steam_src = (app / 'SteamGames.swift').read_text()
 taken = block(steam_src, '    mutating func takeRecommendedProgram(_ name: String) {', '\n    }\n')
 assert 'guard let appID = steamAppID else { return }' in taken and 'SteamDirectStart.programs(in: folder)' in taken
@@ -431,6 +434,7 @@ struct LibraryEntry {
     var recommendedProgram: String? = nil
     var steamID: Int? = nil
     var metalFXUpscale: Double? = nil
+    var controllerMode: String? = nil
     var dockSteam: Bool? = nil
     mutating func takeRecommendedProgram(_ name: String) { recommendedProgram = name }   // SteamGames.swift
 }
@@ -694,8 +698,16 @@ check(LogStore.shared.lines.contains { $0.hasPrefix("[recommended] Red Dead Rede
 UserDefaults.standard.removeObject(forKey: key)
 var ring = LibraryEntry(title: "ELDEN RING", windowsPath: steam + #"\ELDEN RING"#, steamAppID: 1245620)
 check(R.prepare(&ring, new: true) && ring.recommendedProgram == "PLAY MADEIRA.exe" && ring.fpsMode == 3
-      && ring.resolution == "800x600" && ring.metalFXUpscale == 2,
+      && ring.resolution == "960x540" && ring.metalFXUpscale == 2 && ring.controllerMode == "keys",
       "a new Elden Ring entry takes PLAY MADEIRA.exe with the list's fields")
+ring.controllerMode = "dinput"
+check(!R.prepare(&ring) && ring.controllerMode == "dinput", "an existing player's controller choice is preserved")
+check(R.reset(&ring)?.id == "elden-ring" && ring.controllerMode == "keys", "Elden Ring reset restores the working controller route")
+check(R.eldenRing.switchSummary.contains("controller as keyboard and mouse"), R.eldenRing.switchSummary)
+var unrelatedPad = LibraryEntry(title: "Other", windowsPath: #"C:\Other\Other.exe"#)
+unrelatedPad.controllerMode = "dinput"
+_ = R.reset(&unrelatedPad)
+check(unrelatedPad.controllerMode == "dinput", "a preset without a controller choice preserves it")
 var rdrCopy = LibraryEntry(title: "Red Dead Redemption 2", windowsPath: steam + #"\RDR2 Copy"#, steamAppID: 1174180)
 check(R.prepare(&rdrCopy, new: true) && rdrCopy.recommendedProgram == nil, "a list without a program sets none")
 check(R.eldenRing.switchSummary.hasSuffix("starts PLAY MADEIRA.exe"), R.eldenRing.switchSummary)

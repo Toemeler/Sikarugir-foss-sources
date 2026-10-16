@@ -1810,10 +1810,6 @@ struct mad_list {
     struct mad_device *device;
     struct mad_cmd *cmds;
     unsigned ncmds, ccap;
-    /* Resources reached by address through root descriptors; declared
-     * resident at every draw because Metal cannot see them. */
-    struct mad_resource **used;
-    unsigned nused, ucap;
     /* Argument buffers: one slot of root values per draw, carved from shared
      * chunks. A draw's root arguments must survive until the GPU reads them,
      * so a single buffer rewritten per draw would race the previous draw. */
@@ -1840,13 +1836,6 @@ static struct mad_cmd *mad_list_push(struct mad_list *l, enum mad_ck kind) {
     c->kind = kind;
     return c;
 }
-static void mad_list_note_used(struct mad_list *l, struct mad_resource *r) {
-    unsigned i, from = l->nused > 64 ? l->nused - 64 : 0;
-    if (!r) return;
-    for (i = from; i < l->nused; i++) if (l->used[i] == r) return;
-    if (mad_grow((void **)&l->used, &l->ucap, l->nused + 1, sizeof *l->used)) l->used[l->nused++] = r;
-}
-
 static HRESULT STDMETHODCALLTYPE list_QI(ID3D12GraphicsCommandList *This, REFIID riid, void **out) {
     struct mad_obj *o = (struct mad_obj *)This;
     /* ml1144: every D3D12 runtime answers GraphicsCommandList1..7 whatever the
@@ -1873,7 +1862,7 @@ static ULONG STDMETHODCALLTYPE list_Release(ID3D12GraphicsCommandList *This) {
         if (l->alloc) ID3D12CommandAllocator_Release((ID3D12CommandAllocator *)l->alloc);
         for (unsigned k = 0; k < l->nrings; k++) NSObject_release(l->rings[k]);
         if (l->nrings) InterlockedExchangeAdd(&g_ring_chunks, -(LONG)l->nrings);   /* madeira-bcd metal-gap: live chunks */
-        free(l->rings); free(l->ring_cpu); free(l->ring_gpu); free(l->cmds); free(l->used); free(l->cdata);
+        free(l->rings); free(l->ring_cpu); free(l->ring_gpu); free(l->cmds); free(l->cdata);
         free(l);
     }
     return (ULONG)r;
@@ -1904,7 +1893,6 @@ static HRESULT STDMETHODCALLTYPE list_Reset(ID3D12GraphicsCommandList *This,
     l->recorded_generation = l->alloc->generation;
     l->closed = 0;
     l->ncmds = 0;
-    l->nused = 0;
     l->ncdata = 0;
     l->rec_rs[0] = l->rec_rs[1] = NULL; l->rec_heap = NULL;   /* madeira-bcd static-cbv */
     memset(l->rec_tab, 0, sizeof l->rec_tab); memset(l->lat_va, 0, sizeof l->lat_va); memset(l->lat_data, 0, sizeof l->lat_data);
@@ -8026,6 +8014,35 @@ static int mad_use_seen(struct mad_exec *e, obj_handle_t enc, obj_handle_t h, UI
     return 0;
 }
 
+/* Root descriptors contain GPU addresses, not owning resource references.
+ * Resolve only the active bind point's current descriptors at the draw or
+ * dispatch. A list-wide pointer history can outlive an overwritten binding:
+ * its resource may be freed before replay, and declaring that stale Metal
+ * buffer makes command-buffer completion retain/release a dead object.
+ * Keep graphics and compute separate, cover every root parameter, and merge
+ * read/write usage when several roots name the same buffer. */
+struct mad_root_use { obj_handle_t buffer; UINT32 usage; };
+static unsigned mad_root_resources(struct mad_device *d, const struct mad_rootsig *rs,
+                                   const UINT64 *root, struct mad_root_use *out) {
+    unsigned i, n = 0;
+    if (!d || !rs || !root || !out) return 0;
+    for (i = 0; i < rs->nparams && i < MAD_ROOT_PARAM_MAX; i++) {
+        unsigned j, type = rs->params[i].type;
+        UINT32 usage;
+        UINT64 off = 0;
+        struct mad_resource *r;
+        if (type != MADEIRA_IR_PARAM_CBV && type != MADEIRA_IR_PARAM_SRV && type != MADEIRA_IR_PARAM_UAV) continue;
+        if (!root[i]) continue;
+        r = mad_resolve_address(d, root[i], &off);
+        if (!r || !r->buffer) continue;
+        usage = WMTResourceUsageRead | (type == MADEIRA_IR_PARAM_UAV ? WMTResourceUsageWrite : 0);
+        for (j = 0; j < n; j++) if (out[j].buffer == r->buffer) break;
+        if (j == n) { out[n].buffer = r->buffer; out[n].usage = usage; n++; }
+        else out[j].usage |= usage;
+    }
+    return n;
+}
+
 /* madeira-bcd: skip-ps / skip-ps-cycle (see g_skip_ps_tok). Names are split on
  * commas, semicolons and blanks. */
 static void mad_skip_ps_load(void) {
@@ -8500,9 +8517,10 @@ tess_go:
         for (i = 0; i < 16; i++) if (e->vb[i].res) MAD_USE(e->vb[i].res->buffer);
         if (e->ib) MAD_USE(e->ib->buffer);
     }
-    for (i = e->l->nused > 64 ? e->l->nused - 64 : 0; i < e->l->nused; i++) {
-        struct mad_resource *r = e->l->used[i];
-        if (r) MAD_USE(r->texture ? r->texture : r->buffer);
+    {
+        struct mad_root_use roots[MAD_ROOT_PARAM_MAX];
+        unsigned n = mad_root_resources(dev, e->rs, e->root, roots);
+        for (i = 0; i < n; i++) MAD_USE_U(roots[i].buffer, roots[i].usage);
     }
     /* ml1060: with a residency set (ml880) these two loops are a fallback, and once
      * the application has more than 256 viewed resources they are not even that:
@@ -8570,8 +8588,8 @@ tess_go:
                       e->has_vp ? e->vp.MinDepth : 0.0f, e->has_vp ? e->vp.MaxDepth : 0.0f,
                       e->has_sc ? "" : "none", e->has_sc ? (long)e->sc.left : 0L, e->has_sc ? (long)e->sc.top : 0L, e->has_sc ? (long)e->sc.right : 0L, e->has_sc ? (long)e->sc.bottom : 0L);
         if (e->pso->blend[0]) n += snprintf(line + n, sizeof(line) - n, " blend='%s'", e->pso->blend);   /* ml1106 */
-        n += snprintf(line + n, sizeof(line) - n, " srv=%s smp=%s nsrv=%u used=%u vb=[",
-                      e->srv ? "y" : "n", e->smp ? "y" : "n", dev->nsrv, e->l->nused);
+        n += snprintf(line + n, sizeof(line) - n, " srv=%s smp=%s nsrv=%u root-params=%u vb=[",
+                      e->srv ? "y" : "n", e->smp ? "y" : "n", dev->nsrv, e->rs ? e->rs->nparams : 0);
         for (k = 0; k < 16 && n < (int)sizeof(line) - 120; k++) if (e->vb[k].res)
             n += snprintf(line + n, sizeof(line) - n, " %u:off%llu/sz%llu/st%u%s", k, (unsigned long long)e->vb[k].off,
                           (unsigned long long)e->vb[k].res->size, e->vb[k].stride, e->vb[k].res->buffer ? "" : "(NOBUF)");
@@ -9508,9 +9526,10 @@ static void exec_dispatch(struct mad_exec *e, const struct mad_cmd *c) {
         ur[nur].usage = (u); MAD_APPEND(&ur[nur]); nur++; } } while (0)
     if (e->srv) MAD_CUSE(e->srv->buffer, WMTResourceUsageRead);
     if (e->smp) MAD_CUSE(e->smp->buffer, WMTResourceUsageRead);
-    for (i = e->l->nused > 64 ? e->l->nused - 64 : 0; i < e->l->nused; i++) {
-        struct mad_resource *r = e->l->used[i];
-        if (r) MAD_CUSE(r->texture ? r->texture : r->buffer, (enum WMTResourceUsage)(WMTResourceUsageRead | WMTResourceUsageWrite));
+    {
+        struct mad_root_use roots[MAD_ROOT_PARAM_MAX];
+        unsigned n = mad_root_resources(dev, e->crs, e->croot, roots);
+        for (i = 0; i < n; i++) MAD_CUSE(roots[i].buffer, (enum WMTResourceUsage)roots[i].usage);
     }
     const int ml1060_cskip = dev->resset && dev->nsrv > 256;   /* same reasoning as exec_draw */
     if (!ml1060_cskip) AcquireSRWLockShared(&dev->list_lock);
@@ -18069,7 +18088,6 @@ static void mad_record_croot(struct mad_list *l, UINT index, UINT64 value, int r
     if (!c) return;
     c->u.root.index = index; c->u.root.value = value;
     if (!resolve && g_scbv_on > 0) l->rec_tab[1][index] = value;   /* madeira-bcd static-cbv: a table */
-    if (resolve) { UINT64 off = 0; mad_list_note_used(l, mad_resolve_address(l->device, value, &off)); }
 }
 static void STDMETHODCALLTYPE list_SetComputeRootConstantBufferView(ID3D12GraphicsCommandList *This, UINT index, D3D12_GPU_VIRTUAL_ADDRESS a) { mad_record_croot((struct mad_list *)This, index, a, 1); }
 static void STDMETHODCALLTYPE list_SetComputeRootShaderResourceView(ID3D12GraphicsCommandList *This, UINT index, D3D12_GPU_VIRTUAL_ADDRESS a) { mad_record_croot((struct mad_list *)This, index, a, 1); }
@@ -18374,10 +18392,6 @@ static void mad_record_root(struct mad_list *l, UINT index, UINT64 value, int re
     if (!c) return;
     c->u.root.index = index; c->u.root.value = value;
     if (!resolve && g_scbv_on > 0) l->rec_tab[0][index] = value;   /* madeira-bcd static-cbv: a table */
-    if (resolve) {
-        UINT64 off = 0;
-        mad_list_note_used(l, mad_resolve_address(l->device, value, &off));
-    }
 }
 static void STDMETHODCALLTYPE list_SetGraphicsRootConstantBufferView(ID3D12GraphicsCommandList *This,
         UINT index, D3D12_GPU_VIRTUAL_ADDRESS addr) { mad_record_root((struct mad_list *)This, index, addr, 1); }

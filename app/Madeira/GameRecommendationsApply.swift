@@ -177,6 +177,7 @@ extension GameRecommendations {
         }
         if let mode = rec.display { entry.display = mode == DisplayMode.fit.rawValue ? nil : mode }
         if let factor = rec.metalFXUpscale { entry.metalFXUpscale = factor }
+        if let mode = rec.controllerMode { entry.controllerMode = mode }
         // A Steam game whose install folder has the list's program starts it through Madeira Dock.
         if let program = rec.program { entry.takeRecommendedProgram(program) }
         // A game added by hand, still named after its program file (PLAY MADEIRA.exe is

@@ -70,6 +70,9 @@ struct GameRecommendation: Equatable {
     var display: String? = nil
     /// Game details › Display › MetalFX upscaling (LibraryEntry.metalFXUpscale): 1.5 or 2.
     var metalFXUpscale: Double? = nil
+    /// LibraryEntry.controllerMode: "keys" routes a physical pad as keyboard and mouse.
+    /// nil leaves the player's controller choice alone.
+    var controllerMode: String? = nil
     /// A Steam game's program by file name ("PLAY MADEIRA.exe"): when its install
     /// folder has one, Madeira Dock starts it with Valve's client running for it,
     /// as if picked in Game details › Steam › Program. Without one, nothing changes.
@@ -104,6 +107,7 @@ struct GameRecommendation: Equatable {
         }
         if let resolution { parts.append(resolution == Self.screen720 ? "this screen's shape at 720 lines" : resolution) }
         if let metalFXUpscale { parts.append("MetalFX \(metalFXUpscale == 2 ? "2" : String(metalFXUpscale))x") }
+        if controllerMode == "keys" { parts.append("controller as keyboard and mouse") }
         if let program { parts.append("starts \(program)") }
         return parts.joined(separator: ", ")
     }
@@ -580,8 +584,12 @@ enum GameRecommendations {
     /// 4:3 iPad. A 16:9 monitor filled to the screen has no bars and no distortion; Fill
     /// crops about 12.5% from the left and right edges. The game's own Screen Resolution
     /// has to be 960x540 too, or it asks for its saved mode again.
+    /// Version 7 (2026-10-16): a paired physical controller on the M4 iPad running
+    /// build 35 did not reach the game through XInput. The owner confirmed that
+    /// the live Keyboard and mouse mode restored input and requested it as the
+    /// preset. This is a working input route, not a repair of native XInput.
     static let eldenRing = GameRecommendation(
-        id: "elden-ring", title: "Elden Ring", version: 6,
+        id: "elden-ring", title: "Elden Ring", version: 7,
         config: """
         # Madeira's recommended settings for Elden Ring (an 8 GB iPad; not device-tested yet).
         # Reset to Recommended, at the bottom of the game's settings, brings them back.
@@ -601,7 +609,7 @@ enum GameRecommendations {
         env.MADEIRA_SMC_HOST_PAGE = 1
         """,
         wineVCRT: false, fastSync: true, fpsMode: 3, resolution: "960x540", display: "fill",
-        metalFXUpscale: 2, program: "PLAY MADEIRA.exe", storeAppID: 1245620)
+        metalFXUpscale: 2, controllerMode: "keys", program: "PLAY MADEIRA.exe", storeAppID: 1245620)
 
     /// Raft (Unity, Direct3D 11 through DXMT) for an 8 GB iPad Pro M4 (owner's
     /// request, 2026-10-15). Not device-tested yet: every line is one the owner
