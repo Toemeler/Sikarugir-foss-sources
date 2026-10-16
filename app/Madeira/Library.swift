@@ -270,6 +270,11 @@ struct LibraryEntry: Codable, Identifiable {
     var steamProgramArguments: String?
     var steamProgramFolder: String?
     var steamProgramSource: String?
+    /// Madeira Dock: a program inside the install folder ("bin/start.exe") that Dock
+    /// starts itself once Valve's client is signed in and running, instead of asking
+    /// it to launch the game (madeira-dock MADEIRA_STEAM_HOST_PROGRAM); it and every
+    /// program it starts can use Steam. nil: Steam's own launch, as always.
+    var dockProgram: String?
     /// The install folder, build and picked program a Steam game's `bits` and
     /// `graphicsAPI` were read for, and whether Steam's launch configuration was
     /// cached (LibraryModel.refreshSteamMetadata); any change reads them again.

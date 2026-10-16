@@ -24,8 +24,8 @@
 //      anywhere else a copy from outside Steam (Rockstar Games Launcher or
 //      another store), and each has its own list. Red Dead Redemption 2's
 //      RDR2.exe and PlayRDR2.exe the same way.
-//    - Elden Ring by eldenring.exe or by the Seamless Co-op mod's
-//      ersc_launcher.exe, which starts it; Raft by Raft.exe. Little
+//    - Elden Ring by eldenring.exe, by the Seamless Co-op mod's
+//      ersc_launcher.exe, which starts it, or by PLAY MADEIRA.exe; Raft by Raft.exe. Little
 //      Nightmares Enhanced Edition only by its Steam App ID (its program
 //      name is not known yet, and the original game's is LittleNightmares.exe).
 //    - Any other game, and the Desktop, gets the standard list (owner's
@@ -68,6 +68,10 @@ struct GameRecommendation: Equatable {
     static let screen720 = "screen@720"
     /// Aspect & scaling (DisplayMode raw value); "fit" is the default.
     var display: String? = nil
+    /// A Steam game's program by file name ("PLAY MADEIRA.exe"): when its install
+    /// folder has one, Madeira Dock starts it with Valve's client running for it,
+    /// as if picked in Game details › Steam › Program. Without one, nothing changes.
+    var program: String? = nil
 
     /// The config file's text as GameProfile stores it (one trailing newline).
     var fileText: String { config.hasSuffix("\n") ? config : config + "\n" }
@@ -85,6 +89,7 @@ struct GameRecommendation: Equatable {
             parts.append("FPS limit \(label)")
         }
         if let resolution { parts.append(resolution == Self.screen720 ? "this screen's shape at 720 lines" : resolution) }
+        if let program { parts.append("starts \(program)") }
         return parts.joined(separator: ", ")
     }
 }
@@ -535,8 +540,12 @@ enum GameRecommendations {
     /// stamped orphan-lock mode; and the standard list's ec-hook reporter off. 720
     /// lines at 30 FPS. AVX is left as it is. Without madeira-bcd's defaults: the
     /// game never ran with them, and MADEIRA_FREE_DELAY_MS stalled Madeira Dock.
+    /// Version 2 (owner's request, 2026-10-16): when its install folder has PLAY
+    /// MADEIRA.exe, Madeira Dock starts that instead of Steam's launch of the game, so
+    /// it uses less memory; Valve's client still runs, for the Seamless Co-op launcher
+    /// it starts, which asks for Steam. PLAY MADEIRA.exe added by hand gets this list too.
     static let eldenRing = GameRecommendation(
-        id: "elden-ring", title: "Elden Ring", version: 1,
+        id: "elden-ring", title: "Elden Ring", version: 2,
         config: """
         # Madeira's recommended settings for Elden Ring (an 8 GB iPad; not device-tested yet).
         # Reset to Recommended, at the bottom of the game's settings, brings them back.
@@ -553,7 +562,8 @@ enum GameRecommendations {
         env.MADEIRA_LOCK_ORPHAN = stamped
         env.MADEIRA_EC_HOOK_TRACE = 0
         """,
-        wineVCRT: false, fastSync: true, fpsMode: 3, resolution: "1280x720", display: "fit")
+        wineVCRT: false, fastSync: true, fpsMode: 3, resolution: "1280x720", display: "fit",
+        program: "PLAY MADEIRA.exe")
 
     /// Raft (Unity, Direct3D 11 through DXMT) for an 8 GB iPad Pro M4 (owner's
     /// request, 2026-10-15). Not device-tested yet: every line is one the owner
@@ -698,8 +708,9 @@ enum GameRecommendations {
             return godOfWar
         case "horizonzerodawn.exe":
             return horizonZeroDawn
-        case "eldenring.exe", "ersc_launcher.exe":
-            // The game, or the Seamless Co-op mod's launcher beside it, which starts it.
+        case "eldenring.exe", "ersc_launcher.exe", "play madeira.exe":
+            // The game, the Seamless Co-op mod's launcher beside it, which starts it, or
+            // PLAY MADEIRA.exe, which uses less memory.
             return eldenRing
         case "raft.exe":
             return raft

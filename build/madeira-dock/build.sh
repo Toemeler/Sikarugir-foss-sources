@@ -23,7 +23,7 @@ MINGW="${LLVM_MINGW:-$REPO_ROOT/toolchains/llvm-mingw-20260421-ucrt-macos-univer
 CC="$MINGW/x86_64-w64-mingw32-clang"
 OUT="$REPO_ROOT/app/Madeira/arm64ec-windows"
 
-[ -f "$SRC/src/main.c" ] || { echo "madeira-dock is missing: git submodule update --init madeira-dock" >&2; exit 1; }
+[ -f "$SRC/src/main.c" ] || { echo "madeira-dock is missing from this checkout" >&2; exit 1; }
 [ -x "$CC" ] || { echo "missing cross compiler: $CC (set LLVM_MINGW)" >&2; exit 1; }
 
 if [ "${1:-}" = "--check" ]; then

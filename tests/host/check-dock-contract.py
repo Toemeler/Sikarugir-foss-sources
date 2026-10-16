@@ -82,12 +82,10 @@ if git.returncode == 0:
     tracked = subprocess.run(['git', '-C', str(root), 'ls-files', 'app/Madeira/arm64ec-windows/dockhost.exe',
                               'app/Madeira/arm64ec-windows/dock-notices.txt'], capture_output=True, text=True).stdout.strip()
     require(tracked == '', 'no built Dock executable or notices are tracked')
-    gitlink = subprocess.run(['git', '-C', str(root), 'ls-files', '-s', 'madeira-dock'], capture_output=True, text=True).stdout
-    fields = gitlink.split()
-    dock_head = subprocess.run(['git', '-C', str(root / 'madeira-dock'), 'rev-parse', 'HEAD'],
-                               capture_output=True, text=True)
-    require(len(fields) >= 2 and fields[0] == '160000' and dock_head.returncode == 0 and
-            fields[1] == dock_head.stdout.strip(), 'madeira-dock matches the revision pinned by Madeira')
+    # madeira-dock is part of this repository: its sources are tracked here, not a submodule pin.
+    dock_files = subprocess.run(['git', '-C', str(root), 'ls-files', '-s', 'madeira-dock/src/main.c', 'madeira-dock/src/launch.c'],
+                                capture_output=True, text=True).stdout.splitlines()
+    require(len([line for line in dock_files if line.startswith('100644 ')]) == 2, 'madeira-dock sources are tracked in Madeira')
 else:
     print('SKIP: not a usable git checkout here; tracked-binary and submodule-pin checks not run')
 

@@ -103,6 +103,16 @@ library session. The sheet has:
 Tap a game. Dock is started with Steam's default launch option only; custom
 arguments are not supported.
 
+A library Steam game can instead name a **Program** for Dock (Game details ›
+Steam › Program; a game list's `program`, GameRecommendations.swift). Dock then
+signs in and checks the licence as always, publishes itself as the running
+Steam, and starts that program (an `.exe` inside the game's folder) itself
+instead of Steam's launch (`MADEIRA_STEAM_HOST_PROGRAM`, madeira-dock
+`src/launch.c`). It and every program it starts can use Steam, for any app the
+account owns; the session ends when the last of them has. Results 53 (not a
+program in the game's folder) and 54 (could not be started). Without a chosen
+program, nothing changes: every other start is Steam's `LaunchApp`.
+
 ## How a launch works
 
 1. Madeira checks: JIT is enabled, no session has run in this app run,

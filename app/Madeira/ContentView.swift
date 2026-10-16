@@ -3399,6 +3399,19 @@ struct ContentView: View {
             let chosen = options.flatMap { SteamDirectStart.choose($0, installFolder: installFolder)?.launchIndex }
             let launchOption = chosen ?? 0
             LogStore.shared.log("[madeira-dock] launch option \(launchOption)\(chosen == nil ? " (none chosen: the default)" : "")")
+            // A program chosen for Dock (Game details › Steam › Program) starts instead of
+            // Steam's launch, with Valve's client running for it; it must still be installed.
+            var program: String? = nil
+            if let chosenProgram = profile?.dockProgram, !chosenProgram.isEmpty {
+                guard let found = await Task.detached(priority: .userInitiated, operation: {
+                    SteamDirectStart.onDisk(chosenProgram, in: installFolder, directory: false)
+                }).value else {
+                    fail(DockError.message("The program chosen for Madeira Dock is no longer in this game's folder. Choose another in Game details › Steam › Program."))
+                    return
+                }
+                program = game.windowsInstallPath + "\\" + found.replacingOccurrences(of: "/", with: "\\")
+                LogStore.shared.log("[madeira-dock] app \(game.id): starts the chosen program with Steam running")
+            }
             await SteamOwnedLibrary.shared.prepareDock()
             do {
                 // The launch state may have changed while the connection closed.
@@ -3411,7 +3424,7 @@ struct ContentView: View {
                 }
                 try MadeiraDock.writeHandoff(account: signIn.accountName, token: signIn.refreshToken, appID: game.id)
             } catch { fail(error); return }
-            MadeiraDock.configure(game, launchOption: launchOption)
+            MadeiraDock.configure(game, launchOption: launchOption, program: program)
             // The game's one-time installs (its Steam install script) run first, in the same
             // session. No session runs yet, so the registry files can be read and written.
             // madeira-bcd: they run in a session of their own (DockInstallers.installsOnly), and

@@ -251,6 +251,11 @@ enum MadeiraDock {
                 }
                 return "Madeira Dock could not read the one-use Steam sign-in transfer. Steam has not checked the login yet. Export the log before trying again."
             }
+            // The program chosen for Dock (LibraryEntry.dockProgram, madeira-dock src/launch.c).
+            if result == 53 { return "Madeira Dock did not start the chosen program: it is not a program inside this game's folder. Choose another in Game details › Steam › Program." }
+            if result == 54 {
+                return "Steam signed in, but the chosen program could not be started (Windows error \(fields["launch-program-start-error"] ?? "?")). Export the log before trying again."
+            }
             // Valve's client could not prepare the game's per-user executable.
             if result == 49 {
                 switch fields["ceg-result"].flatMap(Int.init) {
@@ -328,6 +333,8 @@ enum MadeiraDock {
         "ceg-finished-jobs", "ceg-result", "ceg-disabled", "ceg-unsupported-client",
         "ceg-scm", "ceg-scm-started", "ceg-scm-error", "ceg-service-registered", "ceg-service-install", "ceg-service-stop", "ceg-scm-stopped",
         "game-scm", "game-scm-timeout", "launch-keep-alive",
+        "launch-program-invalid", "launch-program-verified", "launch-program-appid", "launch-program-start-error",
+        "launch-program-job", "launch-program-started", "launch-program-ended", "launch-program-exit",
         "shutdown-begin", "shutdown-complete", "probe-result"]
     /// The host's report rounds (madeira-dock src/main.c).
     static let reportRounds: Set<String> = ["ml1820", "ml1830", "ml1860", "ml1870", "ml1970", "ml1990", "ml2000", "ml2011", "ml2015", "ml2016"]
@@ -431,12 +438,18 @@ enum MadeiraDock {
     }
 
     /// The host's environment for one launch.
-    static func configure(_ game: DockGame, launchOption: UInt32 = 0) {
+    /// `program`: a Windows path inside the game's folder that the host starts itself
+    /// once Valve's client runs (LibraryEntry.dockProgram); nil is Steam's own launch.
+    static func configure(_ game: DockGame, launchOption: UInt32 = 0, program: String? = nil) {
         for key in ["MADEIRA_STEAM_HOST_PROBE", "MADEIRA_STEAM_HOST_SESSION", "MADEIRA_STEAM_HOST_LOGIN", "MADEIRA_STEAM_HOST_LAUNCH"] {
             setenv(key, "1", 1)
         }
         setenv("MADEIRA_STEAM_HOST_APPID", String(game.id), 1)
         setenv("MADEIRA_STEAM_HOST_LAUNCH_OPTION", String(launchOption), 1)
+        // Every other start leaves these unset, so Valve's client launches the game as before.
+        unsetenv("MADEIRA_STEAM_HOST_PROGRAM_ARGS")
+        if let program { setenv("MADEIRA_STEAM_HOST_PROGRAM", program, 1) } else { unsetenv("MADEIRA_STEAM_HOST_PROGRAM") }
+        SteamLog.event("[dock-launch] program=\(program == nil ? "steam" : "chosen")")
         setenv("MADEIRA_STEAM_HOST_CLIENT_DIR", SteamRuntimeFiles.windowsRoot, 1)
         setenv("MADEIRA_STEAM_HOST_EXPECTED_INSTALL", game.windowsInstallPath, 1)
         setenv("MADEIRA_STEAM_HOST_LOG", "C:\\madeira-dock.txt", 1)

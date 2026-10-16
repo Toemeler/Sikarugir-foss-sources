@@ -303,7 +303,7 @@ jobs:
           MODS=()
           [ "$NEED_WINE" = true ] && MODS+=(wine)
           [ "$NEED_DXMT" = true ] && MODS+=(dxmt)
-          [ "$NEED_DOCK" = true ] && MODS+=(madeira-dock)
+          # madeira-dock is part of this repository: nothing to fetch for it ($NEED_DOCK).
           if [ ${#MODS[@]} -gt 0 ]; then
             echo "fetching: ${MODS[*]}"
             git submodule update --init --recursive --depth 1 --jobs 4 -- "${MODS[@]}"

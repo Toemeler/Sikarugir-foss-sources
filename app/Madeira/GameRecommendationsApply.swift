@@ -26,8 +26,8 @@
 //
 //  The config file and the switches LibraryPrefs keeps belong to the game's
 //  Windows path. A library entry's own fields (fastsync, FPS limit,
-//  resolution, scaling) are written with them, or later for an entry new to
-//  the library.
+//  resolution, scaling, and for a Steam game the program a list names) are
+//  written with them, or later for an entry new to the library.
 //
 
 import Foundation
@@ -176,6 +176,8 @@ extension GameRecommendations {
             else if let lines720 = ResolutionChoices.screen720Value { entry.resolution = lines720 }
         }
         if let mode = rec.display { entry.display = mode == DisplayMode.fit.rawValue ? nil : mode }
+        // A Steam game whose install folder has the list's program starts it through Madeira Dock.
+        if let program = rec.program { entry.takeRecommendedProgram(program) }
     }
 
     private static var marks: [String: String] {

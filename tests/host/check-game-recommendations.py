@@ -261,8 +261,17 @@ assert er['tested'] == ['swap-mb = 6144', 'swap-mode = 2', 'swap-min-mb = 1', 'v
                         'pso-lazy-libs = 1', 'msc-unbounded-retry = 1', 'msc-fail-memo = 1', 'pso-placeholder = 1',
                         'quiet-log = 1', 'env.MADEIRA_LOCK_ORPHAN = stamped', 'env.MADEIRA_EC_HOOK_TRACE = 0'], er['lines']
 assert not any(line.startswith('clear-rects') for line in er['lines']), 'Elden Ring has no clear-rects'
-assert er['version'] == 1 and er['switches'] == ('wineVCRT: false, fastSync: true, fpsMode: 3, resolution: "1280x720", '
-                                                 'display: "fit"'), er
+# Version 2 (owner's request, 2026-10-16): the Steam game starts PLAY MADEIRA.exe when its folder has it (less memory).
+assert er['version'] == 2 and er['switches'] == ('wineVCRT: false, fastSync: true, fpsMode: 3, resolution: "1280x720", '
+                                                 'display: "fit", program: "PLAY MADEIRA.exe"'), er
+assert not any('program:' in p['switches'] for p in presets.values() if p is not er), "a program is Elden Ring's only"
+fields = block(apply_src, '    private static func takeEntryFields(', '\n    }\n')
+assert 'if let program = rec.program { entry.takeRecommendedProgram(program) }' in fields
+steam_src = (app / 'SteamGames.swift').read_text()
+taken = block(steam_src, '    mutating func takeRecommendedProgram(_ name: String) {', '\n    }\n')
+assert 'guard let appID = steamAppID else { return }' in taken and 'SteamDirectStart.programs(in: folder)' in taken
+# Through Madeira Dock, so Valve's client runs for the program (it may ask for Steam).
+assert 'steamStart = nil' in taken and 'dockProgram = found' in taken and 'SteamDirectStart.mode' not in taken
 # Raft, version 1 (owner's request, 2026-10-15): Unity on DXMT for an 8 GB iPad Pro M4; not device-tested yet.
 # A 4 GB broad swap file, a 2 GB video memory budget, the memory left reported as available, the stamped
 # orphan-lock mode, the standard list's ec-hook reporter off; this screen's shape at 720 lines, 30 FPS.
@@ -310,7 +319,7 @@ assert 'case "ghostoftsushima.exe":' in match and 'case "gow.exe":' in match and
 assert 'case "horizonzerodawn.exe":\n            return horizonZeroDawn' in match
 assert 'if steamAppID == horizonZeroDawnAppID || installFolder == "horizon zero dawn" { return horizonZeroDawn }' in match
 assert 'if steamAppID == eldenRingAppID || installFolder == "elden ring" { return eldenRing }' in match
-assert 'case "eldenring.exe", "ersc_launcher.exe":' in match and 'return eldenRing' in match
+assert 'case "eldenring.exe", "ersc_launcher.exe", "play madeira.exe":' in match and 'return eldenRing' in match
 assert 'if steamAppID == raftAppID || installFolder == "raft" { return raft }' in match
 assert 'case "raft.exe":\n            return raft' in match
 # Little Nightmares Enhanced Edition by its App ID only: its program's name is not known yet.
@@ -409,6 +418,8 @@ struct LibraryEntry {
     var fpsMode = 1
     var fastSync: Bool? = nil
     var semaphoreFastPath: Bool? = nil
+    var recommendedProgram: String? = nil
+    mutating func takeRecommendedProgram(_ name: String) { recommendedProgram = name }   // SteamGames.swift
 }
 
 final class PrefStore {
@@ -496,6 +507,8 @@ check(id(elden + #"\Game\eldenring.exe"#) == "elden-ring" && id(elden + #"\Game\
 check(id(#"C:\Games\Elden Ring\Game\ERSC_LAUNCHER.EXE"#) == "elden-ring" && id(#"C:\ER\eldenring.exe"#) == "elden-ring",
       "outside Steam, in any case")
 check(id(elden + #"\Game\start_protected_game.exe"#) == "none", "the anti-cheat starter is not the game")
+check(id(elden + #"\Game\PLAY MADEIRA.exe"#) == "elden-ring" && id(#"C:\ER\play madeira.EXE"#) == "elden-ring",
+      "PLAY MADEIRA.exe, in or outside Steam")
 check(id(steam + #"\Raft"#, 648800) == "raft" && id(steam + #"\Raft"#) == "raft", "Raft by its App ID or Steam folder")
 check(id(steam + #"\Raft\Raft.exe"#) == "raft" && id(#"D:\Games\raft\RAFT.EXE"#) == "raft", "Raft's program anywhere, in any case")
 check(id(steam + #"\Raft\UnityCrashHandler64.exe"#) == "none", "not Unity's crash handler")
@@ -504,7 +517,7 @@ check(id(steam + #"\Little Nightmares"#, 424840) == "none" && id(#"C:\LN\Atlas\B
       "the original game has no list")
 check(id(#"C:\Games\Foo\foo.exe"#) == "none" && id(steam + #"\Portal 2"#, 620) == "none", "other games")
 check(id("") == "none" && id("C:\\") == "none", "no path")
-print("PASS: Steam games by App ID or steamapps\\common folder, GTA V Enhanced and RDR2 inside and outside Steam, GoT, GoW, Horizon Zero Dawn, Elden Ring (and its Seamless Co-op launcher) and Raft by their programs, Little Nightmares EE by its App ID, others none")
+print("PASS: Steam games by App ID or steamapps\\common folder, GTA V Enhanced and RDR2 inside and outside Steam, GoT, GoW, Horizon Zero Dawn, Elden Ring (and its Seamless Co-op launcher and PLAY MADEIRA.exe) and Raft by their programs, Little Nightmares EE by its App ID, others none")
 
 // The lists themselves.
 check(Set(R.all.map(\.id)).count == R.all.count, "ids are unique")
@@ -666,6 +679,12 @@ var gotOwn = LibraryEntry(title: "Ghost of Tsushima", windowsPath: got)
 check(R.prepare(&gotOwn, new: true) && LibraryPrefs.avx(got) && LibraryPrefs.nvidia(got) && gotOwn.resolution == "1280x720", "GoT by its program")
 check(LogStore.shared.lines.contains { $0.hasPrefix("[recommended] Red Dead Redemption 2: rdr2-steam v\(R.rdr2Steam.version) written (first sight)") }, "log line")
 UserDefaults.standard.removeObject(forKey: key)
+var ring = LibraryEntry(title: "ELDEN RING", windowsPath: steam + #"\ELDEN RING"#, steamAppID: 1245620)
+check(R.prepare(&ring, new: true) && ring.recommendedProgram == "PLAY MADEIRA.exe" && ring.fpsMode == 3,
+      "a new Elden Ring entry takes PLAY MADEIRA.exe with the list's fields")
+var rdrCopy = LibraryEntry(title: "Red Dead Redemption 2", windowsPath: steam + #"\RDR2 Copy"#, steamAppID: 1174180)
+check(R.prepare(&rdrCopy, new: true) && rdrCopy.recommendedProgram == nil, "a list without a program sets none")
+check(R.eldenRing.switchSummary.hasSuffix("starts PLAY MADEIRA.exe"), R.eldenRing.switchSummary)
 print("PASS: drive_c is looked up for a program's list; a new entry takes the fields of a list written for its path before")
 '''
 

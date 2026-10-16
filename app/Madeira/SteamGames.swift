@@ -200,6 +200,28 @@ enum SteamGamesRules {
     }
 }
 
+extension LibraryEntry {
+    /// A recommended list's program (GameRecommendation.program, by file name): a Steam
+    /// game whose install folder has it starts it through Madeira Dock, with Valve's client
+    /// running for it (Game details › Steam › Program); the shallowest one when there are
+    /// several. Without one, nothing changes.
+    mutating func takeRecommendedProgram(_ name: String) {
+        guard let appID = steamAppID else { return }
+        let wanted = name.lowercased()
+        let folder = LibraryModel.drive.appendingPathComponent(relativePath, isDirectory: true)
+        let found = SteamDirectStart.programs(in: folder)
+            .filter { ($0.split(separator: "/").last.map(String.init) ?? $0).lowercased() == wanted }
+            .min { $0.split(separator: "/").count < $1.split(separator: "/").count }
+        guard let found else {
+            LogStore.shared.log("[steam-start] app=\(appID) recommended program not in the install folder; start unchanged")
+            return
+        }
+        steamStart = nil
+        dockProgram = found
+        LogStore.shared.log("[steam-start] app=\(appID) mode=dock dock-program=recommended")
+    }
+}
+
 /// "Start with: The game" on a Steam game's Game details page: the game's own
 /// program runs in Wine without Steam, which suits games that do not need Steam
 /// (DRM-free ones). Which program is Steam's own launch configuration for the app
@@ -1209,6 +1231,16 @@ struct SteamEntrySection: View {
                     Text("Madeira Dock needs Valve's client components. Download them in Settings › Steam › Madeira Dock.")
                         .font(.caption).foregroundStyle(.orange)
                 }
+                // Steam's own launch, or a program of the install folder that Dock starts with
+                // Valve's client running for it (a launcher or mod that asks for Steam).
+                Picker("Program", selection: Binding(get: { entry.dockProgram ?? "" }, set: { pickDock($0) })) {
+                    Text("Steam's launch").tag("")
+                    ForEach(dockPickerPrograms, id: \.self) { Text($0).tag($0) }
+                }.pickerStyle(.navigationLink)
+                if entry.dockProgram != nil {
+                    Text("Madeira Dock signs in to Steam, then starts this program instead of the game's Steam launch. It and every program it starts can use Steam.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 Toggle("Smaller JIT pool (512 MB) for this launch", isOn: $dock.compactPool)
                 // The game's One-time installs choice (Madeira Dock, DockInstallers).
                 if DockInstallers.choiceEnabled, dock.installPrograms[appID] != nil {
@@ -1277,6 +1309,20 @@ struct SteamEntrySection: View {
         return [chosen] + programs
     }
 
+    /// The Dock Program picker's rows: the folder's programs, and a kept choice that is not among them.
+    private var dockPickerPrograms: [String] {
+        guard let chosen = entry.dockProgram, !programs.contains(chosen) else { return programs }
+        return [chosen] + programs
+    }
+
+    /// The Dock Program picker's choice; "" is Steam's own launch.
+    private func pickDock(_ program: String) {
+        let next: String? = program.isEmpty ? nil : program
+        guard next != entry.dockProgram else { return }
+        entry.dockProgram = next
+        LogStore.shared.log("[steam-start] app=\(entry.steamAppID ?? 0) dock-program=\(next == nil ? "steam" : "choice")")
+    }
+
     /// Start with: Madeira Dock (stored as no choice, the default) or The game.
     private func choose(_ mode: String) {
         let next: String? = mode == SteamDirectStart.mode ? mode : nil
@@ -1299,8 +1345,13 @@ struct SteamEntrySection: View {
     /// is still there, takes Steam's launch configuration for the app (SteamDirectStart.choose);
     /// failing that, the only program when there is exactly one.
     private func resolveProgram() async {
-        guard entry.startsSteamGameDirectly, let appID = entry.steamAppID else { return }
         let folder = LibraryModel.drive.appendingPathComponent(entry.relativePath, isDirectory: true)
+        if entry.steamAppID != nil, !entry.startsSteamGameDirectly {
+            // Madeira Dock: only the Program picker's rows.
+            programs = await Task.detached(priority: .userInitiated) { SteamDirectStart.programs(in: folder) }.value
+            return
+        }
+        guard entry.startsSteamGameDirectly, let appID = entry.steamAppID else { return }
         let found = await Task.detached(priority: .userInitiated) { SteamDirectStart.programs(in: folder) }.value
         programs = found
         if entry.steamProgramSource == "choice", let program = entry.steamProgram, found.contains(program) { return }
