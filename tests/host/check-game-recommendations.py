@@ -258,7 +258,7 @@ assert not any(line.startswith(('pso-lazy-libs', 'clear-rects'))
 # shader-library and refused-shader switches and quiet-log, the stamped orphan-lock mode, the standard
 # list's ec-hook reporter off; 720 lines at 30 FPS, AVX and NVIDIA left as they are.
 assert er['tested'] == ['swap-mb = 6144', 'swap-mode = 2', 'swap-min-mb = 1', 'vram-mb = 3072', 'avail-phys = 1',
-                        'pso-lazy-libs = 1', 'msc-unbounded-retry = 1', 'msc-fail-memo = 1', 'pso-placeholder = 1',
+                        'pso-lazy-libs = 1', 'pso-warm = 2', 'msc-unbounded-retry = 1', 'msc-fail-memo = 1', 'pso-placeholder = 1',
                         'quiet-log = 1', 'local-write = 1', 'env.MADEIRA_LOCK_ORPHAN = stamped', 'env.MADEIRA_EC_HOOK_TRACE = 0',
                         'env.MADEIRA_SMC_HOST_PAGE = 1'], er['lines']
 # Version 3: local-write = 1 (the Seamless Co-op launcher's WriteProcessMemory into the game), Elden Ring's only.
@@ -273,7 +273,8 @@ assert (root / 'build' / 'fex-arm64ec' / 'patches' / '0001-smc-host-page.patch')
 # Version 6 (owner's request, 2026-10-16): 960x540 and Fill. The game draws 16:9 in any window (800x452 with
 # bars at 800x600), so a 16:9 monitor filled to the 4:3 iPad has no bars and no distortion.
 # Version 7: owner-confirmed physical controller input through keyboard and mouse.
-assert er['version'] == 7 and er['switches'] == ('wineVCRT: false, fastSync: true, fpsMode: 3, resolution: "960x540", '
+# Version 8 (measured on the M4 iPad, builds 40/43): pso-warm = 2, background pipeline compiles.
+assert er['version'] == 8 and er['switches'] == ('wineVCRT: false, fastSync: true, fpsMode: 3, resolution: "960x540", '
                                                  'display: "fill", metalFXUpscale: 2, controllerMode: "keys", program: "PLAY MADEIRA.exe", storeAppID: 1245620'), er
 assert not any('controllerMode:' in p['switches'] for p in presets.values() if p is not er), "other games keep their controller mode"
 assert not any('program:' in p['switches'] for p in presets.values() if p is not er), "a program is Elden Ring's only"

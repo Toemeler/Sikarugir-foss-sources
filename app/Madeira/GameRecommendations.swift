@@ -588,8 +588,14 @@ enum GameRecommendations {
     /// build 35 did not reach the game through XInput. The owner confirmed that
     /// the live Keyboard and mouse mode restored input and requested it as the
     /// preset. This is a working input route, not a repair of native XInput.
+    /// Version 8 (2026-10-16, measured on the M4 iPad, builds 40 and 43): pso-warm = 2.
+    /// Pipelines are compiled once in the background when the game creates them, so the
+    /// first draw finds them in Metal's cache (318 of 324 in 0.4 ms instead of 35-47 ms
+    /// each); without it, walking built 60 pipelines at first draw (1.2 s of hitches in
+    /// 50 s). madsync (a crash in the YAFSML mod loader), env.MADEIRA_SRV_DIRECT = 2 (no
+    /// gain) and env.FEX_TSOENABLED = 0 (endless loading screen) were tested and left out.
     static let eldenRing = GameRecommendation(
-        id: "elden-ring", title: "Elden Ring", version: 7,
+        id: "elden-ring", title: "Elden Ring", version: 8,
         config: """
         # Madeira's recommended settings for Elden Ring (an 8 GB iPad; not device-tested yet).
         # Reset to Recommended, at the bottom of the game's settings, brings them back.
@@ -599,6 +605,7 @@ enum GameRecommendations {
         vram-mb = 3072
         avail-phys = 1
         pso-lazy-libs = 1
+        pso-warm = 2
         msc-unbounded-retry = 1
         msc-fail-memo = 1
         pso-placeholder = 1
