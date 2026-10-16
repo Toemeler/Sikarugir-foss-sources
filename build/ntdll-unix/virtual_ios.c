@@ -22193,7 +22193,7 @@ static void ios_exe_patch( char *base, SIZE_T total_size, const IMAGE_NT_HEADERS
     if (!env || !*env || !nt_name || !nt_name->Buffer) return;
     len = nt_name->Length / sizeof(WCHAR);
     start = len;
-    while (start > 0 && nt_name->Buffer[start - 1] != '\' && nt_name->Buffer[start - 1] != '/') start--;
+    while (start > 0 && nt_name->Buffer[start - 1] != '\\' && nt_name->Buffer[start - 1] != '/') start--;
     for (i = start; i < len && nlen < (int)sizeof(name) - 1; i++)
     {
         WCHAR c = nt_name->Buffer[i];

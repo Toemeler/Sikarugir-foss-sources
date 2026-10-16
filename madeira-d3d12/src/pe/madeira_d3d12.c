@@ -10206,8 +10206,8 @@ static void mad_ft_note(LONGLONG now, LONGLONG fq) {
     if (g_ft_n < MAD_FT_MAX) g_ft_ms[g_ft_n++] = ms;
     if (ms >= 100.0f && g_ft_hitch_said < 4000) {
         SYSTEMTIME st; GetLocalTime(&st); g_ft_hitch_said++;
-        d3d12_log("[perf] hitch %.1f ms ending %02u:%02u:%02u.%03u
-", ms, st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
+        d3d12_log("[perf] hitch %.1f ms ending %02u:%02u:%02u.%03u\n", ms,
+                  (unsigned)st.wHour, (unsigned)st.wMinute, (unsigned)st.wSecond, (unsigned)st.wMilliseconds);
     }
 }
 static void mad_ft_report(void) {
@@ -10217,15 +10217,15 @@ static void mad_ft_report(void) {
     qsort(g_ft_ms, n, sizeof *g_ft_ms, mad_ft_cmp);
     for (i = 0; i < n; i++) {
         float v = g_ft_ms[i];
-        for (k = 0; k < 8 && v > g_ft_edges[k]; k++) ;
+        k = 0;
+        while (k < 8 && v > g_ft_edges[k]) k++;
         h[k]++;
         over34 += v > 34.0f; over50 += v > 50.0f; over100 += v > 100.0f; over250 += v > 250.0f;
     }
     GetLocalTime(&st);
     d3d12_log("[perf] frame-times %02u:%02u:%02u.%03u n=%ld p50=%.1f p90=%.1f p99=%.1f max=%.1f ms; >34 %ld >50 %ld >100 %ld >250 %ld; "
-              "hist<=25,34,40,50,67,100,250,1000,more %ld %ld %ld %ld %ld %ld %ld %ld %ld
-",
-              st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, n, g_ft_ms[n / 2], g_ft_ms[(n * 9) / 10], g_ft_ms[(n * 99) / 100], g_ft_ms[n - 1],
+              "hist<=25,34,40,50,67,100,250,1000,more %ld %ld %ld %ld %ld %ld %ld %ld %ld\n",
+              (unsigned)st.wHour, (unsigned)st.wMinute, (unsigned)st.wSecond, (unsigned)st.wMilliseconds, n, g_ft_ms[n / 2], g_ft_ms[(n * 9) / 10], g_ft_ms[(n * 99) / 100], g_ft_ms[n - 1],
               over34, over50, over100, over250, h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7], h[8]);
     g_ft_n = 0;
 }
