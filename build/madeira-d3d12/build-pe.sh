@@ -13,6 +13,20 @@ TESTS="$REPO_ROOT/madeira-d3d12/tests/windows"
 OUT="${OUT:-$REPO_ROOT/build/madeira-d3d12/out-pe}"
 mkdir -p "$OUT"
 
+# CI has the shipped winemetal.dll and its headers, but not DXMT's PE build
+# directory. Reconstruct the import library from that exact DLL's exports;
+# no Wine/DXMT PE rebuild is needed just to rebuild this runtime.
+WINEMETAL_LIB="$REPO_ROOT/dxmt/build-arm64ec/src/winemetal"
+if [ ! -f "$WINEMETAL_LIB/libwinemetal.dll.a" ] && [ ! -f "$WINEMETAL_LIB/libwinemetal.a" ]; then
+    mkdir -p "$WINEMETAL_LIB"
+    "$MINGW/llvm-readobj" --coff-exports "$REPO_ROOT/app/Madeira/arm64ec-windows/winemetal.dll" > "$OUT/winemetal-exports.txt"
+    {
+        printf 'LIBRARY winemetal.dll\nEXPORTS\n'
+        awk '$1 == "Name:" { printf "  %s\n", $2; n++ } END { if (!n) exit 1 }' "$OUT/winemetal-exports.txt"
+    } > "$OUT/winemetal.def"
+    "$MINGW/llvm-dlltool" -m arm64ec -d "$OUT/winemetal.def" -l "$WINEMETAL_LIB/libwinemetal.dll.a"
+fi
+
 # Regenerate the stub tables so a toolchain header update cannot silently leave
 # the vtables the wrong length.
 python3 "$SRC/gen_vtables.py" \
@@ -71,6 +85,10 @@ if command -v xcrun > /dev/null 2>&1 &&
 else
     echo "  helper kernels did not build -- what needs them is skipped"
     head -20 "$OUT/mad_kernels.err" 2> /dev/null || true
+    if [ "${MAD_REQUIRE_KERNELS:-0}" = 1 ]; then
+        echo "helper kernels are required for this release" >&2
+        exit 1
+    fi
 fi
 
 echo "=== madeira_d3d12.dll (arm64ec) ==="
@@ -84,6 +102,10 @@ echo "  built $(ls -l "$OUT/madeira_d3d12.dll" | awk '{print $5}') bytes"
 # the standard entry points, while the tests keep loading it by the old name.
 cp "$OUT/madeira_d3d12.dll" "$OUT/d3d12.dll"
 echo "  exports: $("$MINGW/llvm-objdump" --private-headers "$OUT/d3d12.dll" 2>/dev/null | grep -cE '^ +[0-9]+ +0x[0-9a-f]+ +D3D12|^ +[0-9]+ .*D3D12')  (ordinal 101/102 pinned by d3d12.def)"
+
+# Release CI rebuilds the runtime, leaving the unrelated test executables and
+# D3D12Core forwarder unchanged. The regular developer build still builds all.
+if [ "${RUNTIME_ONLY:-0}" = 1 ]; then exit 0; fi
 
 # The Agility SDK half: D3D12SDKVersion plus forwarders to d3d12.dll. It ships
 # next to d3d12.dll; nothing loads it unless madeira.cfg d3d12-core-dll is set.

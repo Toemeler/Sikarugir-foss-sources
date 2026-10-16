@@ -7,9 +7,9 @@
 #
 # Three jobs: LLVM for iOS (hours, so built once and cached), the app (every
 # native library docs/BUILDING.md lists, then Xcode), and the Pages site. The
-# Windows-side DLLs are committed in app/Madeira/*-windows and are not rebuilt,
-# except the x64 emulator xtajit64.dll: built from the pinned FEX plus
-# build/fex-arm64ec/patches.
+# Windows-side DLLs are committed in app/Madeira/*-windows. The native D3D12
+# runtime is rebuilt from source, as is the x64 emulator xtajit64.dll (from the
+# pinned FEX plus build/fex-arm64ec/patches).
 
 name: Build
 
@@ -372,14 +372,14 @@ jobs:
           xcrun -sdk macosx metal --version >/dev/null 2>&1 || xcodebuild -downloadComponent MetalToolchain
           xcrun -sdk macosx metal --version
 
-          if [ "$NEED_WINE" = true ] || [ "$NEED_DOCK" = true ] || [ "$NEED_FEXEC" = true ]; then
-            mkdir -p toolchains
-            curl -fsSL --retry 3 -o "toolchains/$MINGW.tar.xz" \
-              "https://github.com/mstorsjo/llvm-mingw/releases/download/20260421/$MINGW.tar.xz"
-            echo "$MINGW_SHA256  toolchains/$MINGW.tar.xz" | shasum -a 256 -c -
-            tar -xJf "toolchains/$MINGW.tar.xz" -C toolchains
-            rm "toolchains/$MINGW.tar.xz"
-          fi
+          # The D3D12 PE runtime is rebuilt for every release, including runs
+          # whose Wine, Dock and FEX native libraries were all cached.
+          mkdir -p toolchains
+          curl -fsSL --retry 3 -o "toolchains/$MINGW.tar.xz" \
+            "https://github.com/mstorsjo/llvm-mingw/releases/download/20260421/$MINGW.tar.xz"
+          echo "$MINGW_SHA256  toolchains/$MINGW.tar.xz" | shasum -a 256 -c -
+          tar -xJf "toolchains/$MINGW.tar.xz" -C toolchains
+          rm "toolchains/$MINGW.tar.xz"
 
           # build/freetype-ios/build.sh and the win32u/dwrite unix sides read it here.
           if [ "$NEED_WINE" = true ] || [ "$NEED_FREETYPE" = true ]; then
@@ -491,6 +491,16 @@ jobs:
         with:
           key: ${{ steps.keys.outputs.dxmt }}
           path: app/Madeira/libdxmt_combined.a
+
+      - name: D3D12 runtime (ARM64EC)
+        if: steps.appcheck.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          git submodule update --init --depth 1 -- dxmt
+          MAD_BUILD_ID="${GITHUB_SHA:0:12}" RUNTIME_ONLY=1 MAD_REQUIRE_KERNELS=1 \
+            build/madeira-d3d12/build-pe.sh
+          cp build/madeira-d3d12/out-pe/d3d12.dll app/Madeira/arm64ec-windows/d3d12.dll
+          cp build/madeira-d3d12/out-pe/madeira_d3d12.dll app/Madeira/arm64ec-windows/madeira_d3d12.dll
 
       - name: In-app pairing
         if: steps.appcheck.outputs.skip != 'true' && steps.c-pairing.outputs.cache-hit != 'true'

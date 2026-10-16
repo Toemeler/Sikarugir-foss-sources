@@ -28,7 +28,7 @@
 
 /* What the extracted regions expect from the rest of the runtime. The bounds
  * must match the runtime's (MAD_ROOT_PARAM_MAX / MAD_ROOT_RANGE_SANE). */
-#define MAD_ROOT_PARAM_MAX 32
+#define MAD_ROOT_PARAM_MAX 64
 #define MAD_ROOT_RANGE_SANE 8192
 static int g_quiet;
 static void d3d12_log(const char *fmt, ...) {
@@ -420,7 +420,7 @@ int main(void) {
             { 44 + 0,  3,          E_NOTIMPL,    "version 1.2" },
             { 44 + 0,  7,          E_INVALIDARG, "unknown version" },
             { 44 + 0,  0,          E_INVALIDARG, "version 0" },
-            { 44 + 4,  33,         E_NOTIMPL,    "too many parameters" },
+            { 44 + 4,  65,         E_NOTIMPL,    "too many parameters" },
             { 44 + 4,  0x7fffffff, E_NOTIMPL,    "absurd parameter count" },
             { 44 + 12, 33,         E_NOTIMPL,    "too many samplers" },
             { 44 + 8,  0xfffffff0, E_INVALIDARG, "parameter offset out of range" },
@@ -488,6 +488,40 @@ int main(void) {
         }
         g_quiet = 0;
         printf("fuzz: 20000 corrupted blobs, %u accepted, no crash\n", accepted);
+    }
+
+    {   /* Elden Ring's 36 tables and the valid 64-table DWORD boundary. */
+        unsigned counts[] = {36, 64};
+        D3D12_ROOT_PARAMETER1 params[64];
+        D3D12_DESCRIPTOR_RANGE1 ranges[64];
+        unsigned k, j;
+        memset(params, 0, sizeof params); memset(ranges, 0, sizeof ranges);
+        for (j = 0; j < 64; j++) {
+            ranges[j].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+            ranges[j].NumDescriptors = 1; ranges[j].BaseShaderRegister = j;
+            params[j].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+            params[j].DescriptorTable.NumDescriptorRanges = 1;
+            params[j].DescriptorTable.pDescriptorRanges = &ranges[j];
+        }
+        for (k = 0; k < sizeof counts / sizeof counts[0]; k++) {
+            D3D12_ROOT_SIGNATURE_DESC1 desc; SIZE_T nb = 0;
+            ID3D12VersionedRootSignatureDeserializer *vd = NULL;
+            unsigned char *blob;
+            memset(&desc, 0, sizeof desc);
+            desc.NumParameters = counts[k]; desc.pParameters = params;
+            blob = serialize(&desc, &nb);
+            CHECK(blob && nb, "%u tables serialize", counts[k]);
+            hr = blob ? mad_rsd_create(blob, nb, &IID_ID3D12VersionedRootSignatureDeserializer, (void **)&vd, 1) : E_FAIL;
+            CHECK(hr == S_OK && vd, "%u tables deserialize", counts[k]);
+            if (vd) {
+                const D3D12_VERSIONED_ROOT_SIGNATURE_DESC *round = ID3D12VersionedRootSignatureDeserializer_GetUnconvertedRootSignatureDesc(vd);
+                CHECK(round->Desc_1_1.NumParameters == counts[k], "%u parameters preserved", counts[k]);
+                CHECK(round->Desc_1_1.pParameters[33].DescriptorTable.pDescriptorRanges[0].BaseShaderRegister == 33,
+                      "table at index 33 preserved");
+                ID3D12VersionedRootSignatureDeserializer_Release(vd);
+            }
+            free(blob);
+        }
     }
 
     {   /* An empty root signature: no parameters, no samplers, NULL arrays. */

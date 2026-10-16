@@ -1214,7 +1214,8 @@ static void mad_view_list_del(struct mad_device *d, int uav, struct mad_resource
 
 DEFINE_GUID(IID_IMTLDXGIDevice, 0x6bfa1657, 0x9cb1, 0x471a, 0xa4, 0xfb, 0x7c, 0xac, 0xf8, 0xa8, 0x12, 0x07);
 
-#define MAD_ROOT_PARAM_MAX 32
+/* Elden Ring serializes 36 root parameters; D3D12 permits up to 64 DWORDs. */
+#define MAD_ROOT_PARAM_MAX 64
 #define MAD_ROOT_RANGE_MAX 32        /* ml1009: the OLD fixed cap; now only a log reference */
 #define MAD_ROOT_RANGE_SANE 8192     /* ml1009: refuse-a-corrupt-blob bound, not a capability limit */
 /* The parsed root signature, not the blob. The converter needs the layout at
@@ -1433,7 +1434,7 @@ static void mad_pl_del(struct mad_memheap *h, struct mad_resource *r);
 struct mad_device;
 static void mad_mheap_reclaim(struct mad_device *d, int all);   /* ml1148 */
 struct mad_rootsig;
-static UINT mad_root_layout(const struct mad_rootsig *rs, UINT offsets[32]);
+static UINT mad_root_layout(const struct mad_rootsig *rs, UINT offsets[MAD_ROOT_PARAM_MAX]);
 static int mad_tiled_on(void);   /* d3d12-tiled-resources (opt-in), see TILED RESOURCES */
 
 static HRESULT mad_creation_failure(struct mad_device *d, const char *what) {
