@@ -270,8 +270,10 @@ assert not any(line.startswith('clear-rects') for line in er['lines']), 'Elden R
 # Elden Ring's only: it invalidates four times the code per fault, which other games should not pay.
 assert not any(line.startswith('env.MADEIRA_SMC_HOST_PAGE') for p in presets.values() if p is not er for line in p['lines']),     "the host-page SMC switch is Elden Ring's only"
 assert (root / 'build' / 'fex-arm64ec' / 'patches' / '0001-smc-host-page.patch').is_file(), 'the FEX patch the switch needs'
-assert er['version'] == 5 and er['switches'] == ('wineVCRT: false, fastSync: true, fpsMode: 3, resolution: "800x600", '
-                                                 'display: "fit", metalFXUpscale: 2, program: "PLAY MADEIRA.exe", storeAppID: 1245620'), er
+# Version 6 (owner's request, 2026-10-16): 960x540 and Fill. The game draws 16:9 in any window (800x452 with
+# bars at 800x600), so a 16:9 monitor filled to the 4:3 iPad has no bars and no distortion.
+assert er['version'] == 6 and er['switches'] == ('wineVCRT: false, fastSync: true, fpsMode: 3, resolution: "960x540", '
+                                                 'display: "fill", metalFXUpscale: 2, program: "PLAY MADEIRA.exe", storeAppID: 1245620'), er
 assert not any('program:' in p['switches'] for p in presets.values() if p is not er), "a program is Elden Ring's only"
 fields = block(apply_src, '    private static func takeEntryFields(', '\n    }\n')
 assert 'if let program = rec.program { entry.takeRecommendedProgram(program) }' in fields

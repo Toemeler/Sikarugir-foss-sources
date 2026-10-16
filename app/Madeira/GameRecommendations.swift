@@ -574,8 +574,14 @@ enum GameRecommendations {
     /// after it was injected (build 28). FEX caught those writes per 4 KB page while iOS
     /// protects 16 KB pages, so code it had already translated could be overwritten unseen
     /// and run stale; the switch makes FEX trap per 16 KB page (build/fex-arm64ec/patches).
+    /// Version 6 (owner's request, 2026-10-16): 960x540 and Fill. The game renders a 16:9
+    /// picture whatever the window: at 800x600 it drew 800x452 at y = 74 with black bars
+    /// above and below (build 35's capture), so version 4's 4:3 monitor kept the bars on a
+    /// 4:3 iPad. A 16:9 monitor filled to the screen has no bars and no distortion; Fill
+    /// crops about 12.5% from the left and right edges. The game's own Screen Resolution
+    /// has to be 960x540 too, or it asks for its saved mode again.
     static let eldenRing = GameRecommendation(
-        id: "elden-ring", title: "Elden Ring", version: 5,
+        id: "elden-ring", title: "Elden Ring", version: 6,
         config: """
         # Madeira's recommended settings for Elden Ring (an 8 GB iPad; not device-tested yet).
         # Reset to Recommended, at the bottom of the game's settings, brings them back.
@@ -594,7 +600,7 @@ enum GameRecommendations {
         env.MADEIRA_EC_HOOK_TRACE = 0
         env.MADEIRA_SMC_HOST_PAGE = 1
         """,
-        wineVCRT: false, fastSync: true, fpsMode: 3, resolution: "800x600", display: "fit",
+        wineVCRT: false, fastSync: true, fpsMode: 3, resolution: "960x540", display: "fill",
         metalFXUpscale: 2, program: "PLAY MADEIRA.exe", storeAppID: 1245620)
 
     /// Raft (Unity, Direct3D 11 through DXMT) for an 8 GB iPad Pro M4 (owner's
