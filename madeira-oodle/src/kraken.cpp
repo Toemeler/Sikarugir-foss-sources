@@ -443,7 +443,16 @@ int Log2RoundUp(uint32 v) {
 }
 
 #define ALIGN_16(x) (((x)+15)&~15)
-#define COPY_64(d, s) {*(uint64*)(d) = *(uint64*)(s); }
+// Each LZ match copy can consume bytes written by the previous copy. Keep
+// these eight-byte operations in order, including on compilers that otherwise
+// combine adjacent copies into a wider load/store. memcpy permits unaligned
+// addresses; the empty compiler barrier emits no CPU memory-fence instruction.
+#define COPY_64(d, s) do {                                  \
+    uint64 madeira_copy64_value;                            \
+    memcpy(&madeira_copy64_value, (s), 8);                   \
+    memcpy((d), &madeira_copy64_value, 8);                   \
+    __asm__ __volatile__("" ::: "memory");                   \
+  } while (0)
 #define COPY_64_BYTES(d, s) {                                                 \
         _mm_storeu_si128((__m128i*)d + 0, _mm_loadu_si128((__m128i*)s + 0));  \
         _mm_storeu_si128((__m128i*)d + 1, _mm_loadu_si128((__m128i*)s + 1));  \
