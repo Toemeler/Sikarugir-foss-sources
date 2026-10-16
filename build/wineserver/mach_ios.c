@@ -1138,8 +1138,35 @@ int write_process_memory( struct process *process, client_ptr_t ptr, data_size_t
     kern_return_t ret;
     mach_port_t process_port = get_process_port( process );
     mach_vm_offset_t data;
+    int local = 0;
 
     if (written) *written = 0;
+
+#ifdef WINE_IOS
+    /* Cross-process writes into a pseudo-process of this Unix process
+     * (WriteProcessMemory), opt-in per game: madeira.cfg / a game's own config
+     * local-write = 1. A launcher that injects a DLL writes its path into the
+     * game it started and then runs LoadLibrary there on it; denied, the game
+     * loads an empty name and the launcher ends it. Off by default: enabling
+     * writes for every program once regressed Steam (see get_process_port()).
+     * Only the direct write is used for these targets: the protection-changing
+     * fallback below suspends the target task, which here is this app. */
+    if (!process_port && process->unix_pid == getpid())
+    {
+        static int local_write = -1;
+        if (local_write < 0)
+        {
+            local_write = madeira_cfg_bool( "local-write", 0 );
+            fprintf( stderr, "local pseudo-process writes %s\n",
+                     local_write ? "ENABLED by local-write" : "denied (local-write = 1 enables them)" );
+        }
+        if (local_write)
+        {
+            process_port = mach_task_self();
+            local = 1;
+        }
+    }
+#endif
 
     if (!process_port)
     {
@@ -1167,7 +1194,7 @@ int write_process_memory( struct process *process, client_ptr_t ptr, data_size_t
      * In that case mach_vm_write returns KERN_INVALID_ADDRESS.
      */
 
-    if (ret == KERN_INVALID_ADDRESS)
+    if (ret == KERN_INVALID_ADDRESS && !local)
     {
         mach_vm_address_t current_address = (mach_vm_address_t)ptr;
         mach_vm_address_t region_address = current_address;

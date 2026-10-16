@@ -558,8 +558,12 @@ enum GameRecommendations {
     /// it starts, which asks for Steam. PLAY_MADEIRA.exe added by hand (a copy Steam did
     /// not install) gets this list too, the Elden Ring title and artwork, and starts
     /// with Steam running.
+    /// Version 3 (2026-10-16): local-write = 1. The Seamless Co-op launcher writes its
+    /// DLL's path into the game it started (WriteProcessMemory) and loads it there;
+    /// Madeira denied that write, so the game loaded an empty name and the launcher
+    /// ended it (build/wineserver/mach_ios.c).
     static let eldenRing = GameRecommendation(
-        id: "elden-ring", title: "Elden Ring", version: 2,
+        id: "elden-ring", title: "Elden Ring", version: 3,
         config: """
         # Madeira's recommended settings for Elden Ring (an 8 GB iPad; not device-tested yet).
         # Reset to Recommended, at the bottom of the game's settings, brings them back.
@@ -573,6 +577,7 @@ enum GameRecommendations {
         msc-fail-memo = 1
         pso-placeholder = 1
         quiet-log = 1
+        local-write = 1
         env.MADEIRA_LOCK_ORPHAN = stamped
         env.MADEIRA_EC_HOOK_TRACE = 0
         """,
