@@ -257,10 +257,18 @@ assert not any(line.startswith(('pso-lazy-libs', 'clear-rects'))
 # D3D12 lists: HZD's swap file, a 3 GB video memory budget, the memory left reported as available, HZD's
 # shader-library and refused-shader switches and quiet-log, the stamped orphan-lock mode, the standard
 # list's ec-hook reporter off; 720 lines at 30 FPS, AVX and NVIDIA left as they are.
-assert er['tested'] == ['swap-mb = 6144', 'swap-mode = 2', 'swap-min-mb = 1', 'vram-mb = 3072', 'avail-phys = 1',
-                        'pso-lazy-libs = 1', 'pso-warm = 2', 'msc-unbounded-retry = 1', 'msc-fail-memo = 1', 'pso-placeholder = 1',
-                        'quiet-log = 1', 'local-write = 1', 'env.MADEIRA_LOCK_ORPHAN = stamped', 'env.MADEIRA_EC_HOOK_TRACE = 0',
-                        'env.MADEIRA_SMC_HOST_PAGE = 1'], er['lines']
+# Version 9 (2026-10-17, measured on the M4 iPad, builds 45-48): the owner's working list. Native ARM64EC
+# Oodle (CR2.Decomp stalls gone), heaps #1 and #3 out of the swap file (the freezes were write faults on
+# swap-file pages; Play -> 30 fps 182 s -> 74 s, 4.5 GB peak), swap-min-mb 8, lean diagnostics, 9 cores,
+# the in-memory 4:3 patch at 800x600, and the owner's portable lines every test ran with.
+assert er['tested'] == ['swap-mb = 6144', 'swap-mode = 2', 'swap-min-mb = 8', 'vram-mb = 1024', 'avail-phys = 1',
+                        'ring-share = 1', 'pso-lazy-libs = 1', 'pso-warm = 2', 'msc-unbounded-retry = 1', 'msc-fail-memo = 1',
+                        'pso-placeholder = 1', 'quiet-log = 1', 'local-write = 1', 'env.MADEIRA_LOCK_ORPHAN = stamped',
+                        'env.MADEIRA_EC_HOOK_TRACE = 0', 'env.MADEIRA_SMC_HOST_PAGE = 1', 'env.MADEIRA_CPU_COUNT = 9',
+                        'env.MADEIRA_FPS_CAP = 30', 'env.MADEIRA_LEAN_DIAG = 1', 'env.MADEIRA_EXE_PATCH = eldenring.exe:744f458b94cc:0:eb',
+                        'env.WINEDLLOVERRIDES = dinput8=n,b;oo2core_6_win64=b', 'env.MADEIRA_OODLE_NATIVE = 1',
+                        'env.MADEIRA_SWAP_ANON_RESV = 1024#1,1024#3'], er['lines']
+assert (root / 'madeira-oodle' / 'src' / 'oo2core_shim.cpp').is_file(), 'the native Oodle builtin the list names'
 # Version 3: local-write = 1 (the Seamless Co-op launcher's WriteProcessMemory into the game), Elden Ring's only.
 assert not any(line.startswith('local-write') for p in presets.values() if p is not er for line in p['lines']), "local-write is Elden Ring's only"
 assert not any(line.startswith('clear-rects') for line in er['lines']), 'Elden Ring has no clear-rects'
@@ -274,7 +282,7 @@ assert (root / 'build' / 'fex-arm64ec' / 'patches' / '0001-smc-host-page.patch')
 # bars at 800x600), so a 16:9 monitor filled to the 4:3 iPad has no bars and no distortion.
 # Version 7: owner-confirmed physical controller input through keyboard and mouse.
 # Version 8 (measured on the M4 iPad, builds 40/43): pso-warm = 2, background pipeline compiles.
-assert er['version'] == 8 and er['switches'] == ('wineVCRT: false, fastSync: true, fpsMode: 3, resolution: "960x540", '
+assert er['version'] == 9 and er['switches'] == ('wineVCRT: false, fastSync: true, fpsMode: 3, resolution: "800x600", '
                                                  'display: "fill", metalFXUpscale: 2, controllerMode: "keys", program: "PLAY MADEIRA.exe", storeAppID: 1245620'), er
 assert not any('controllerMode:' in p['switches'] for p in presets.values() if p is not er), "other games keep their controller mode"
 assert not any('program:' in p['switches'] for p in presets.values() if p is not er), "a program is Elden Ring's only"

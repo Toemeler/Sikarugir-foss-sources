@@ -594,16 +594,31 @@ enum GameRecommendations {
     /// each); without it, walking built 60 pipelines at first draw (1.2 s of hitches in
     /// 50 s). madsync (a crash in the YAFSML mod loader), env.MADEIRA_SRV_DIRECT = 2 (no
     /// gain) and env.FEX_TSOENABLED = 0 (endless loading screen) were tested and left out.
+    /// Version 9 (2026-10-17, the owner's working list measured on the iPad Pro M4 13", builds
+    /// 45-48): the game's oo2core_6_win64.dll runs as Madeira's native ARM64EC Oodle decoder
+    /// (oo2core_6_win64=b, MADEIRA_OODLE_NATIVE): under FEX, CR2.Decomp sat at 60-84% for 5-15 s
+    /// whenever an area streamed in, with 0-6 fps in exactly those windows. The game's 1st and 3rd
+    /// 1 GB heaps stay out of the swap file (MADEIRA_SWAP_ANON_RESV): build 47's fault probe found the
+    /// 10-55 s freezes were ~22k write faults/s on swap-file pages iOS had written back, and Play to
+    /// the first steady 30 fps went from 182 s (morning) to 74 s at a 4.5 GB footprint peak; turning
+    /// the swap file off instead ended the app at 6.1 GB. swap-min-mb 8 keeps the loader's 1-4 MB
+    /// buffers in ordinary memory; MADEIRA_LEAN_DIAG stops the samplers that suspended every thread
+    /// four times every 20 s; all 9 cores are reported (build 43: main thread ~40% instead of ~60%).
+    /// 800x600 with eldenring.exe's 16:9 enforcement patched in memory (MADEIRA_EXE_PATCH writes one
+    /// byte only when its pattern occurs exactly once; the game's files are not touched), so the 3D
+    /// fills a 4:3 iPad without bars; the owner's portable lines (ring-share, a 1 GB video memory
+    /// budget, the 30 fps frame cap, dinput8 for the YAFSML mod loader) are the ones every test ran with.
     static let eldenRing = GameRecommendation(
-        id: "elden-ring", title: "Elden Ring", version: 8,
+        id: "elden-ring", title: "Elden Ring", version: 9,
         config: """
-        # Madeira's recommended settings for Elden Ring (an 8 GB iPad; not device-tested yet).
+        # Madeira's recommended settings for Elden Ring (an 8 GB iPad; measured on the iPad Pro M4 13").
         # Reset to Recommended, at the bottom of the game's settings, brings them back.
         swap-mb = 6144
         swap-mode = 2
-        swap-min-mb = 1
-        vram-mb = 3072
+        swap-min-mb = 8
+        vram-mb = 1024
         avail-phys = 1
+        ring-share = 1
         pso-lazy-libs = 1
         pso-warm = 2
         msc-unbounded-retry = 1
@@ -614,8 +629,15 @@ enum GameRecommendations {
         env.MADEIRA_LOCK_ORPHAN = stamped
         env.MADEIRA_EC_HOOK_TRACE = 0
         env.MADEIRA_SMC_HOST_PAGE = 1
+        env.MADEIRA_CPU_COUNT = 9
+        env.MADEIRA_FPS_CAP = 30
+        env.MADEIRA_LEAN_DIAG = 1
+        env.MADEIRA_EXE_PATCH = eldenring.exe:744f458b94cc:0:eb
+        env.WINEDLLOVERRIDES = dinput8=n,b;oo2core_6_win64=b
+        env.MADEIRA_OODLE_NATIVE = 1
+        env.MADEIRA_SWAP_ANON_RESV = 1024#1,1024#3
         """,
-        wineVCRT: false, fastSync: true, fpsMode: 3, resolution: "960x540", display: "fill",
+        wineVCRT: false, fastSync: true, fpsMode: 3, resolution: "800x600", display: "fill",
         metalFXUpscale: 2, controllerMode: "keys", program: "PLAY MADEIRA.exe", storeAppID: 1245620)
 
     /// Raft (Unity, Direct3D 11 through DXMT) for an 8 GB iPad Pro M4 (owner's
