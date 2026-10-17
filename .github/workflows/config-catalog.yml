@@ -1,0 +1,25 @@
+name: Config catalog
+# Regenerates app/Madeira/ConfigCatalog.generated.swift on Linux (the generator
+# is not run on Windows) and uploads it; nothing is committed here.
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  catalog:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Submodules the generator scans
+        run: git submodule update --init --depth 1 --jobs 4 -- FEX wine dxmt
+      - name: Regenerate
+        run: |
+          set -euo pipefail
+          python3 build/tools/gen-config-catalog.py
+          git diff --stat -- app/Madeira/ConfigCatalog.generated.swift
+          python3 build/tools/gen-config-catalog.py --check
+      - uses: actions/upload-artifact@v4
+        with:
+          name: config-catalog
+          path: app/Madeira/ConfigCatalog.generated.swift
