@@ -3783,6 +3783,58 @@ static void exec_rp_list_begin(struct mad_exec *e) {
     }
     if (q->rp_carry && q->rp_carry->renc) exec_rp_take(e, q->rp_carry);
 }
+/* madeira-bcd gpu-traffic: what stood between a pass and the next list's first
+ * draw on the same targets when it could not go on (RPM_PREFIX): the command
+ * kind (enum mad_ck), a barrier that names one of the pass's own textures (or
+ * all of them), or a viewport, scissor or blend factor the next list did not
+ * set again. Index 0 counts the end of the list, 1 the start of the next. */
+#define RPB_NOVP (MC_DISCARD + 1)
+#define RPB_NOSC (MC_DISCARD + 2)
+#define RPB_NOBL (MC_DISCARD + 3)
+#define RPB_BAR_OWN (MC_DISCARD + 4)
+#define RPB_N (MC_DISCARD + 5)
+static volatile LONG g_rp_blk[2][RPB_N];
+static int mad_rp_blk_kind(const struct mad_cmd *c, struct mad_resource *const *rt, UINT nrt, const struct mad_resource *depth) {
+    UINT i, j;
+    if (c->kind != MC_BARRIER) return (int)c->kind;
+    if (c->u.barrier.all) return RPB_BAR_OWN;   /* UAV, aliasing or more than 8: may name anything */
+    for (i = 0; i < c->u.barrier.n && i < 8; i++) {
+        if (depth && c->u.barrier.res[i] == depth) return RPB_BAR_OWN;
+        for (j = 0; j < nrt; j++) if (c->u.barrier.res[i] == rt[j]) return RPB_BAR_OWN;
+    }
+    return MC_BARRIER;
+}
+static int mad_rp_prefix_blk(const struct mad_list *n, struct mad_resource *const *rt, UINT nrt, const struct mad_resource *depth, int blend) {
+    unsigned j; int vp = 0, sc = 0, bl = 0;
+    for (j = 0; j < n->ncmds; j++) {
+        const struct mad_cmd *c = &n->cmds[j];
+        if (c->kind == MC_DRAW || c->kind == MC_DRAW_INDEXED || c->kind == MC_DRAW_INDIRECT || c->kind == MC_DRAW_INDEXED_INDIRECT) break;
+        if (c->kind == MC_VP) vp = 1;
+        else if (c->kind == MC_SCISSOR) sc = 1;
+        else if (c->kind == MC_BLEND_FACTOR) bl = 1;
+        if (!mad_rp_plain(c, rt, nrt, depth)) return mad_rp_blk_kind(c, rt, nrt, depth);
+    }
+    return !vp ? RPB_NOVP : !sc ? RPB_NOSC : (blend && !bl) ? RPB_NOBL : -1;
+}
+static const char *mad_rpb_name(int k) {
+    switch (k) {
+    case MC_BARRIER: return "barrier(other textures)";
+    case RPB_BAR_OWN: return "barrier(own targets or all)";
+    case MC_QUERY_BEGIN: return "query-begin";
+    case MC_QUERY_END: return "query-end";
+    case MC_QUERY_RESOLVE: return "query-resolve";
+    case MC_COPY_BB: case MC_COPY_B2T: case MC_COPY_T2B: case MC_COPY_T2T: return "copy";
+    case MC_DISPATCH: case MC_DISPATCH_INDIRECT: return "dispatch";
+    case MC_CLEAR_RT: case MC_CLEAR_DS: return "clear";
+    case MC_FILL_BB: case MC_FILL_TEX: return "uav-clear";
+    case MC_RESOLVE: return "resolve";
+    case MC_RTS: return "targets-unbound";
+    case RPB_NOVP: return "viewport-not-set";
+    case RPB_NOSC: return "scissor-not-set";
+    case RPB_NOBL: return "blend-factor-not-set";
+    default: return NULL;
+    }
+}
 /* At the end of a list, with its pass still open: hand it to the next list
  * (rp-carry), or count what handing it over would have saved. */
 static void exec_rp_list_end(struct mad_exec *e) {
@@ -3818,6 +3870,17 @@ static void exec_rp_list_end(struct mad_exec *e) {
         InterlockedIncrement(&g_rp_carried); InterlockedExchangeAdd64(&g_rp_carried_b, b);
         return;
     }
+    if (why == RPM_PREFIX) {   /* madeira-bcd gpu-traffic: name what broke the pass */
+        int side = 0, kind = -1;
+        unsigned j = e->l->ncmds;
+        while (j--) {   /* after this list's last draw first, as exec_rp_tail_plain looks */
+            const struct mad_cmd *c = &e->l->cmds[j];
+            if (c->kind == MC_DRAW || c->kind == MC_DRAW_INDEXED || c->kind == MC_DRAW_INDIRECT || c->kind == MC_DRAW_INDEXED_INDIRECT) break;
+            if (!mad_rp_plain(c, e->enc_rt, e->enc_nrt, e->enc_depth)) { kind = mad_rp_blk_kind(c, e->enc_rt, e->enc_nrt, e->enc_depth); break; }
+        }
+        if (kind < 0) { side = 1; kind = mad_rp_prefix_blk(q->rp_next, e->enc_rt, e->enc_nrt, e->enc_depth, e->has_blend); }
+        if (kind >= 0 && kind < RPB_N) InterlockedIncrement(&g_rp_blk[side][kind]);
+    }
     InterlockedIncrement(&g_rp_miss[why]); InterlockedExchangeAdd64(&g_rp_miss_b[why], b);
 }
 /* madeira-bcd gpu-traffic: two [perf] lines per perf-log window, per frame. */
@@ -3840,6 +3903,19 @@ static void mad_tr_report(double np) {
               "after a commit %.1f (%.0f MB)\n",
               cn / np, cb / mb / np, n[RPM_OFF] / np, b[RPM_OFF] / mb / np, n[RPM_PREFIX] / np, b[RPM_PREFIX] / mb / np,
               n[RPM_STATE] / np, b[RPM_STATE] / mb / np, n[RPM_CALL] / np, b[RPM_CALL] / mb / np, n[RPM_COMMIT] / np, b[RPM_COMMIT] / mb / np);
+    {   /* madeira-bcd: what the "commands between" were */
+        char s[640]; int len = 0, side;
+        s[0] = 0;
+        for (side = 0; side < 2; side++)
+            for (k = 0; k < RPB_N; k++) {
+                LONG v = InterlockedExchange(&g_rp_blk[side][k], 0);
+                const char *nm = mad_rpb_name(k);
+                if (!v || len > (int)sizeof s - 64) continue;
+                if (nm) len += snprintf(s + len, sizeof s - len, " %s %s %.1f", side ? "next-list-start" : "list-end", nm, v / np);
+                else len += snprintf(s + len, sizeof s - len, " %s kind%d %.1f", side ? "next-list-start" : "list-end", k, v / np);
+            }
+        if (len) d3d12_log("[perf] gpu-traffic the commands between, per frame:%s\n", s);
+    }
 }
 /* The next list that mad_ecl_run replays into the same command buffer, or NULL. */
 static const struct mad_list *mad_rp_next(const struct mad_queue *q, UINT count, ID3D12CommandList *const *lists, UINT i) {
