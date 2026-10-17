@@ -16,6 +16,19 @@ private func _SecTaskCreateFromSelf(
     _ allocator: CFAllocator?
 ) -> SecTaskRef?
 
+@_silgen_name("SecTaskCopySigningIdentifier")
+private func _SecTaskCopySigningIdentifier(
+    _ task: SecTaskRef,
+    _ error: NSErrorPointer
+) -> CFString?
+
+/// The signing identifier of this process: the installed app's bundle ID, which
+/// is LiveContainer's (not Madeira's) when Madeira runs as a LiveContainer guest.
+func hostSigningIdentifier() -> String? {
+    guard let task = _SecTaskCreateFromSelf(nil) else { return nil }
+    return _SecTaskCopySigningIdentifier(task, nil) as String?
+}
+
 func checkAppEntitlement(_ ent: String) -> Bool {
     guard let task = _SecTaskCreateFromSelf(nil) else { return false }
 

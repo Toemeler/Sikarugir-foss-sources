@@ -11849,7 +11849,12 @@ static int ios_pc_in_app_text( uint64_t pc )
 {
     if (!__atomic_load_n( &ios_app_text_hi, __ATOMIC_ACQUIRE ))
     {
-        const struct mach_header_64 *mh = (const struct mach_header_64 *)_dyld_get_image_header( 0 );
+        /* The image holding this code, not image 0: inside LiveContainer
+         * image 0 is LiveContainer and Madeira is a dlopen'ed guest. */
+        Dl_info info;
+        const struct mach_header_64 *mh = dladdr( (void *)ios_pc_in_app_text, &info ) && info.dli_fbase
+            ? (const struct mach_header_64 *)info.dli_fbase
+            : (const struct mach_header_64 *)_dyld_get_image_header( 0 );
         unsigned long size = 0;
         uint8_t *text = mh ? getsegmentdata( mh, "__TEXT", &size ) : NULL;
 

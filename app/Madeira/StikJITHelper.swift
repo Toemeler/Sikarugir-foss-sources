@@ -38,14 +38,27 @@ enum StikJITHelper {
     /// the older `stikjit` alias remains declared for compatibility.
     static var isAvailable: Bool {
         guard let url = URL(string: "stikdebug://enable-jit") else { return false }
+        // Inside LiveContainer canOpenURL answers from LiveContainer's query
+        // schemes, not Madeira's, so "no" there only means "unknown": try anyway.
+        if getenv("LC_HOME_PATH") != nil { return true }
         return UIApplication.shared.canOpenURL(url)
+    }
+
+    /// The bundle ID StikDebug must attach to. Inside LiveContainer Madeira is a
+    /// guest in LiveContainer's process: Bundle.main reports Madeira's ID, which
+    /// iOS has never installed, so send the host app's signing identifier.
+    static var jitTargetBundleID: String? {
+        if getenv("LC_HOME_PATH") != nil, let host = hostSigningIdentifier() {
+            return host
+        }
+        return Bundle.main.bundleIdentifier
     }
 
     /// Open StikDebug with our JIT script embedded in the URL.
     /// PID targets this running process rather than asking StikDebug to launch a
     /// replacement instance by bundle ID.
     static func enableJIT(completion: @escaping (Result<Void, Error>) -> Void) {
-        guard let bundleID = Bundle.main.bundleIdentifier,
+        guard let bundleID = jitTargetBundleID,
               let scriptData else {
             completion(.failure(RequestError.scriptMissing))
             return

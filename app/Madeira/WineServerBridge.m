@@ -100,7 +100,9 @@ static void *wineserver_thread_func(void *arg) {
 
         // Set up environment for wineserver
         setenv("WINEPREFIX", g_prefix_path, 1);
-        setenv("HOME", g_prefix_path, 1);  // Fallback if WINEPREFIX not used
+        // Fallback if WINEPREFIX not used. Not inside LiveContainer: it keeps the
+        // guest container in HOME and would resolve later paths into the prefix.
+        if (!getenv("LC_HOME_PATH")) setenv("HOME", g_prefix_path, 1);
 
         wine_log_msg("WINEPREFIX=%s", g_prefix_path);
 
