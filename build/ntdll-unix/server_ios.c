@@ -30,6 +30,7 @@
 #include <dlfcn.h>
 #include <mach/mach.h>
 #include <mach/mach_time.h>
+#include <mach/mach_vm.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <sys/time.h>
@@ -743,6 +744,11 @@ static int ios_ts_sym(uint64_t a, char *out, size_t cap)
     return 1;
 }
 
+/* madeira-bcd fault-probe: set by ios_xprobe_main when a 250 ms sample takes more than 4000
+ * faults (at most every 2 s); the sampler thread then runs one pass over the running threads,
+ * so the fault-probe fields land inside the storm rather than only in the 20 s bursts. */
+static volatile int ios_ts_fault_kick;
+
 static void ios_thread_sampler_pass(int burst)
 {
     extern uint64_t ios_native_rip_from_hostpc( uint64_t, uint64_t, const char ** );
@@ -774,6 +780,12 @@ static void ios_thread_sampler_pass(int burst)
         have_cr  = ios_ts_read(x17, cr, sizeof(cr));
         have_stk = !(x23 & 7) && ios_ts_read(x23, stk, sizeof(stk));
         have_nstk = !(sp & 7) && ios_ts_read(sp, nstk, sizeof(nstk));
+        /* madeira-bcd fault-probe: the thread's last synchronous exception (FAR/ESR as the
+         * kernel saved them). Elden Ring, builds 45/46: the main thread spent 5-20 s at one
+         * store at ~22k faults/s, none of them zero-fill, compressor or page-in, each with
+         * exactly one unix syscall; this names the address and the kind of fault. */
+        arm_exception_state64_t es; mach_msg_type_number_t ecnt = ARM_EXCEPTION_STATE64_COUNT;
+        int have_es = thread_get_state(tlist[k], ARM_EXCEPTION_STATE64, (thread_state_t)&es, &ecnt) == KERN_SUCCESS;
         thread_resume(tlist[k]);
         if (have_bb) rip = ios_native_rip_from_hostpc(bb, pc, &why);
         {
@@ -809,6 +821,29 @@ static void ios_thread_sampler_pass(int burst)
                     n += snprintf(line + n, sizeof(line) - n, " %s+0x%llx", mn, (unsigned long long)rva); shown++;
                 }
                 n += snprintf(line + n, sizeof(line) - n, " ]");
+            }
+            if (have_es && running && es.__far && n < (int)sizeof(line) - 300) {   /* madeira-bcd fault-probe */
+                uint64_t far = es.__far;
+                mach_vm_address_t ra = far; mach_vm_size_t rs = 0; mach_port_t on = MACH_PORT_NULL;
+                vm_region_basic_info_data_64_t rb; mach_msg_type_number_t rbc = VM_REGION_BASIC_INFO_COUNT_64;
+                vm_region_extended_info_data_t rx; mach_msg_type_number_t rxc = VM_REGION_EXTENDED_INFO_COUNT;
+                integer_t disp = 0, refc = 0;
+                n += snprintf(line + n, sizeof(line) - n, " | fault far=0x%llx esr=0x%x ec=0x%x dfsc=0x%x %s",
+                              (unsigned long long)far, (unsigned)es.__esr, (unsigned)(es.__esr >> 26),
+                              (unsigned)(es.__esr & 0x3f), (es.__esr & 0x40) ? "W" : "R");
+                if (mach_vm_region(mach_task_self(), &ra, &rs, VM_REGION_BASIC_INFO_64, (vm_region_info_t)&rb, &rbc, &on) == KERN_SUCCESS &&
+                    ra <= far && far < ra + rs) {
+                    n += snprintf(line + n, sizeof(line) - n, " rgn=0x%llx+0x%llx prot=%d/%d shared=%d off=0x%llx",
+                                  (unsigned long long)ra, (unsigned long long)rs, rb.protection, rb.max_protection,
+                                  rb.shared, (unsigned long long)rb.offset);
+                    ra = far; rs = 0;
+                    if (mach_vm_region(mach_task_self(), &ra, &rs, VM_REGION_EXTENDED_INFO, (vm_region_info_t)&rx, &rxc, &on) == KERN_SUCCESS)
+                        n += snprintf(line + n, sizeof(line) - n, " sm=%u ext=%u tag=%u res=%u dirty=%u swp=%u",
+                                      (unsigned)rx.share_mode, (unsigned)rx.external_pager, rx.user_tag,
+                                      rx.pages_resident, rx.pages_dirtied, rx.pages_swapped_out);
+                }
+                if (mach_vm_page_query(mach_task_self(), far & ~(uint64_t)0x3fff, &disp, &refc) == KERN_SUCCESS)
+                    n += snprintf(line + n, sizeof(line) - n, " page=0x%x ref=%d", (unsigned)disp, (int)refc);
             }
             wine_log_write("%s", line);
             printed++;
@@ -2622,6 +2657,11 @@ static void ios_xprobe_main( void )
                                   (unsigned)(tev.faults - ptev.faults), (unsigned)(tev.cow_faults - ptev.cow_faults),
                                   (unsigned)(tev.pageins - ptev.pageins), (unsigned)(tev.syscalls_unix - ptev.syscalls_unix),
                                   (unsigned)(tev.syscalls_mach - ptev.syscalls_mach), (unsigned)(tev.csw - ptev.csw) );
+                    {   /* madeira-bcd fault-probe: kick the sampler inside a fault storm */
+                        static int kick_cool;
+                        if (kick_cool > 0) kick_cool--;
+                        else if (have_tev && tev.faults - ptev.faults > 4000) { ios_ts_fault_kick = 1; kick_cool = 8; }
+                    }
                     ptev = tev; have_tev = 1;
                 }
             }
@@ -2858,8 +2898,11 @@ static void ios_thread_sampler_main(void)
     wine_log_write(ios_lean_diag ? "[thread-sample] ml876 armed for [sync-census] only (MADEIRA_LEAN_DIAG: no bursts, no guest RIP profile)"
                                  : "[thread-sample] ml876 armed (task-wide: burst of 4 passes / 250 ms every 20 s)");
     for (;;) {
-        int b;
-        sleep(20);
+        int b, t;
+        for (t = 0; t < 80; t++) {   /* 20 s in 250 ms steps, answering fault-probe kicks */
+            usleep(250000);
+            if (ios_ts_fault_kick && !ios_lean_diag) { ios_ts_fault_kick = 0; ios_thread_sampler_pass(1); }
+        }
         if (!ios_lean_diag) {
         for (b = 0; b < 4; b++) { ios_thread_sampler_pass(b); usleep(250000); }
         wine_log_write("[thread-sample] ml876 burst done");
