@@ -20357,6 +20357,8 @@ static uint64_t    ios_swap_logical;          /* file offset space: the cap, or 
 static unsigned long long ios_swap_why_bytes[IOS_SW_REASONS];
 static unsigned long long ios_swap_resv_bytes, ios_swap_resv_n, ios_swap_merges, ios_swap_bump_back, ios_swap_free_drop;
 static unsigned long long ios_swap_holes, ios_swap_disk_refused, ios_swap_churn_skips;   /* ml1257 / ml1258 */
+static size_t      ios_swap_willneed_max;     /* madeira-bcd swap-willneed: MADEIRA_SWAP_WILLNEED MB, 0 = off */
+static unsigned long long ios_swap_willneed_bytes, ios_swap_willneed_calls;
 #define IOS_SWAP_CHURN_NS (3ull * 1000000000ull)
 /* ml1226: hits = young deaths, backs = backings of the size; see ios_swap_churny */
 static struct { size_t size; unsigned hits; unsigned backs; } ios_swap_churn[64];
@@ -20435,6 +20437,13 @@ static void ios_swap_init( void )
     ios_swap_fd = open( f, O_RDWR | O_CLOEXEC );
     if (ios_swap_fd < 0) { dprintf( 2, "[swap] ml1077 cannot open %s (errno %d): tier OFF\n", f, errno ); return; }
     ios_swap_config();
+    {   /* madeira-bcd swap-willneed (ios_swap_advise) */
+        const char *w = getenv( "MADEIRA_SWAP_WILLNEED" );
+        if (w && *w) ios_swap_willneed_max = (size_t)strtoull( w, NULL, 10 ) << 20;
+        if (ios_swap_willneed_max)
+            dprintf( 2, "[swap] willneed: fresh commits of up to %zu MB in file pages are read ahead (MADEIRA_SWAP_WILLNEED)\n",
+                     ios_swap_willneed_max >> 20 );
+    }
     ios_swap_logical = ios_swap_cap;
     if (ios_swap_broad && ios_swap_logical < (128ull << 30))
     {
@@ -20870,6 +20879,11 @@ static void ios_swap_tick( int force )
             p = ios_swap_put( p, end, "=" ); p = ios_swap_put_u( p, end, ios_swap_skip_bytes[i] >> 20 );
         }
     }
+    if (ios_swap_willneed_max)   /* madeira-bcd swap-willneed */
+    {
+        p = ios_swap_put( p, end, " | willneed=" );   p = ios_swap_put_u( p, end, ios_swap_willneed_bytes >> 20 );
+        p = ios_swap_put( p, end, "MB in " );         p = ios_swap_put_u( p, end, ios_swap_willneed_calls );
+    }
     if (ios_swap_img_backs || ios_swap_img_refused)   /* madeira-bcd swap-images */
     {
         p = ios_swap_put( p, end, " | images=" );     p = ios_swap_put_u( p, end, ios_swap_img_bytes >> 20 );
@@ -20892,14 +20906,32 @@ static void ios_swap_note( int why, size_t size )
 }
 /* A fresh commit (MEM_COMMIT, with or without MEM_RESERVE) of [base, base+size).
  * classic runs the original rule unchanged. */
+/* madeira-bcd swap-willneed (opt-in, MADEIRA_SWAP_WILLNEED=N): read ahead a fresh commit of
+ * at most N MB that lands in file pages. Elden Ring, build 45: the game's own memset/memcpy
+ * on its main thread ran 5-15 s at ~21k faults/s (~47 us each) with no page-ins and a flat
+ * footprint, i.e. on file pages it had just committed (5.2 GB of commits landed inside
+ * file-backed reservations in 10 minutes); every frame waited. MADV_WILLNEED asks the kernel
+ * to bring those pages in asynchronously, so the game's first write finds them resident.
+ * Only advice: nothing is written and no page changes. */
+static void ios_swap_advise( void *base, size_t size )
+{
+    if (!ios_swap_willneed_max || size > ios_swap_willneed_max) return;
+    if (!madvise( base, size, MADV_WILLNEED )) { ios_swap_willneed_bytes += size; ios_swap_willneed_calls++; }
+}
 static void ios_swap_commit( void *base, size_t size, unsigned int vprot, struct file_view *view )
 {
     int why;
     if (ios_swap_fd < 0) return;
     if (!ios_swap_v2) { if (ios_swap_eligible( base, size, vprot, view )) ios_swap_back( base, size, vprot ); return; }
-    if ((ios_swap_wide || ios_swap_broad) && ios_swap_n && ios_swap_overlaps( base, size )) { ios_swap_note( IOS_SW_PRESENT, size ); return; }
+    if ((ios_swap_wide || ios_swap_broad) && ios_swap_n && ios_swap_overlaps( base, size ))
+    {
+        ios_swap_note( IOS_SW_PRESENT, size );
+        ios_swap_advise( base, size );
+        return;
+    }
     why = ios_swap_why( base, size, vprot, view );
     if (why == IOS_SW_BACKED) why = ios_swap_map( base, size, get_unix_prot( vprot | VPROT_COMMITTED ) );   /* ml1082 */
+    if (why == IOS_SW_BACKED) ios_swap_advise( base, size );
     ios_swap_note( why, size );
 }
 /* wide: a fresh WRITABLE reservation, mapped from the file PROT_NONE (what

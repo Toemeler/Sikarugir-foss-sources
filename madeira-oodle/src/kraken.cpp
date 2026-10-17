@@ -4185,12 +4185,9 @@ size_t Bitknit_Decode(const byte *src, const byte *src_end, byte *dst, byte *dst
 // dst_len bytes are decoded, even if the caller's compressed size includes trailing bytes.
 // Returns dst_len, or -1. The decoder writes up to 64 bytes past dst + dst_len and may read
 // past src + src_len: callers pass buffers with that much room.
-extern "C" long long madeira_ooz_decompress(const unsigned char *src, size_t src_len,
-                                            unsigned char *dst, size_t dst_len) {
+static long long madeira_ooz_decode_whole(KrakenDecoder *dec, const unsigned char *src, size_t src_len,
+                                          unsigned char *dst, size_t dst_len) {
   if (dst_len == 0 || dst_len > 0x7fff0000u)
-    return -1;
-  KrakenDecoder *dec = Kraken_Create();
-  if (!dec)
     return -1;
   size_t offset = 0, history_start = 0;
   while (offset < dst_len) {
@@ -4200,14 +4197,43 @@ extern "C" long long madeira_ooz_decompress(const unsigned char *src, size_t src
     if (!(offset & 0x3ffff) && src_len >= 2 && (src[0] & 0x80)) history_start = offset;
     if (!Kraken_DecodeStep(dec, (byte *)dst + history_start, (int)(offset - history_start), dst_len - offset, src, src_len) ||
         dec->src_used <= 0 || dec->dst_used <= 0 || (size_t)dec->src_used > src_len ||
-        (size_t)dec->dst_used > dst_len - offset) {
-      Kraken_Destroy(dec);
+        (size_t)dec->dst_used > dst_len - offset)
       return -1;
-    }
     src += dec->src_used;
     src_len -= dec->src_used;
     offset += dec->dst_used;
   }
-  Kraken_Destroy(dec);
   return offset == dst_len ? (long long)dst_len : -1;
+}
+
+extern "C" long long madeira_ooz_decompress(const unsigned char *src, size_t src_len,
+                                            unsigned char *dst, size_t dst_len) {
+  KrakenDecoder *dec = Kraken_Create();
+  if (!dec)
+    return -1;
+  long long r = madeira_ooz_decode_whole(dec, src, src_len, dst, dst_len);
+  Kraken_Destroy(dec);
+  return r;
+}
+
+// A decoder a caller keeps across calls (the shim's slots), so a decode does not allocate
+// Kraken_Create's 432 KB every time. madeira_ooz_decompress_dec starts it exactly as
+// Kraken_Create leaves a new one: the header and counters zeroed; the scratch area is working
+// memory written before it is read, as malloc's contents would be.
+extern "C" void *madeira_ooz_decoder_create(void) { return Kraken_Create(); }
+extern "C" void madeira_ooz_decoder_destroy(void *decoder) {
+  if (decoder)
+    Kraken_Destroy((KrakenDecoder *)decoder);
+}
+extern "C" long long madeira_ooz_decompress_dec(void *decoder, const unsigned char *src, size_t src_len,
+                                                unsigned char *dst, size_t dst_len) {
+  KrakenDecoder *dec = (KrakenDecoder *)decoder;
+  if (!dec)
+    return -1;
+  byte *scratch = dec->scratch;
+  size_t scratch_size = dec->scratch_size;
+  memset(dec, 0, sizeof(KrakenDecoder));
+  dec->scratch = scratch;
+  dec->scratch_size = scratch_size;
+  return madeira_ooz_decode_whole(dec, src, src_len, dst, dst_len);
 }

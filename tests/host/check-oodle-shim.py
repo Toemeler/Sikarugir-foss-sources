@@ -52,16 +52,28 @@ STUB = r'''
 #include <windows.h>
 #include <stdint.h>
 #include <string.h>
-static volatile LONG calls, bad_padding;
+static volatile LONG calls, bad_padding, decoders;
 extern "C" __declspec(dllexport) LONG TestDecodeCalls() { return calls; }
 extern "C" __declspec(dllexport) LONG TestBadPadding() { return bad_padding; }
+extern "C" __declspec(dllexport) LONG TestDecoders() { return decoders; }
 extern "C" long long madeira_ooz_decompress(const unsigned char *src, size_t n,
                                             unsigned char *dst, size_t raw) {
     InterlockedIncrement(&calls);
     for (size_t i = 0; i < 64; i++) if (src[n + i]) InterlockedIncrement(&bad_padding);
     // Exercise the exact tail allowance the production decoder receives.
     memset(dst, 0xa5, raw + 64);
+    // Concurrency inputs (src[1] != 1) get their own fill and may hold the decoder.
+    if (n > 2 && src[1] != 1) memset(dst, src[1], raw);
+    if (n > 2 && src[2] == 0x77) Sleep(1);
     return src[0] == 0xff ? -1 : src[0] == 0xfe ? (long long)raw - 1 : (long long)raw;
+}
+extern "C" void *madeira_ooz_decoder_create(void) {
+    InterlockedIncrement(&decoders);
+    return HeapAlloc(GetProcessHeap(), 0, 16);
+}
+extern "C" long long madeira_ooz_decompress_dec(void *decoder, const unsigned char *src, size_t n,
+                                                unsigned char *dst, size_t raw) {
+    return decoder ? madeira_ooz_decompress(src, n, dst, raw) : -1;
 }
 '''
 
@@ -74,6 +86,7 @@ def load_shim(path):
         f.restype = ctypes.c_ssize_t
     dll.TestDecodeCalls.restype = ctypes.c_long
     dll.TestBadPadding.restype = ctypes.c_long
+    dll.TestDecoders.restype = ctypes.c_long
     return dll
 
 
@@ -164,6 +177,36 @@ def worker(path, mode):
     comp[0] = 0
     assert dll.OodleLZ_Decompress(*base) == 64, 'configuration changed mid-session'
     print('ok   private buffers, %d fallback gates, rejected results and stable configuration' % len(gates))
+
+    # Reused slots: a big call, then a smaller one, must still see a zeroed input tail
+    # and write exactly rawLen; then 16 threads at once, holding decoders long enough to
+    # overflow the four slots into the one-shot path, each get their own bytes back.
+    big_comp = (ctypes.c_ubyte * 3000)(*([0, 1, 2] + [0x33] * 2997))
+    big_raw = (ctypes.c_ubyte * (3 << 20))()
+    assert dll.OodleLZ_Decompress(ctypes.addressof(big_comp), len(big_comp), ctypes.addressof(big_raw),
+                                  len(big_raw), 1, 0, 0, 0, 0, 0, 0, 0, 0, 3) == len(big_raw)
+    raw[:] = [0x5a] * len(raw)
+    assert dll.OodleLZ_Decompress(*base) == 64
+    assert bytes(raw[64:]) == bytes([0x5a] * 32), 'reused slot wrote past rawLen'
+    assert dll.TestBadPadding() == 0, 'reused slot left old input in the padding'
+
+    def native(t):
+        comp_t = (ctypes.c_ubyte * 48)(*([0, 2 + t, 0x77] + [t] * 45))
+        for k in range(40):
+            size = 1000 + 7919 * ((t * 40 + k) % 97)
+            raw_t = ctypes.create_string_buffer(b'\x5a' * (size + 32), size + 32)
+            got = dll.OodleLZ_Decompress(ctypes.addressof(comp_t), 48, ctypes.addressof(raw_t), size,
+                                         1, 0, 0, 0, 0, 0, 0, 0, 0, 3)
+            assert got == size, (t, k, got, size)
+            out = ctypes.string_at(ctypes.addressof(raw_t), size + 32)
+            assert out[:size] == bytes([2 + t]) * size, 'thread %d got another call\'s bytes' % t
+            assert out[size:] == b'\x5a' * 32, 'thread %d: write past rawLen' % t
+    with concurrent.futures.ThreadPoolExecutor(max_workers=16) as pool:
+        list(pool.map(native, range(16)))
+    assert dll.TestBadPadding() == 0
+    assert 1 <= dll.TestDecoders() <= 4, 'slots made %d decoders' % dll.TestDecoders()
+    print('ok   reused slots: exact output after a larger call, 640 concurrent decodes on 16 threads, %d decoders'
+          % dll.TestDecoders())
 
 
 def main():

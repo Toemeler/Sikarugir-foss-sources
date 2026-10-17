@@ -2471,6 +2471,11 @@ static void ios_xprobe_main( void )
      * store can be told apart from a fault storm (Elden Ring, build 40: GXWorker
      * 20 s at one stp in mad_list_push with no presents). Measurement only. */
     task_events_info_data_t tev = {0}, ptev = {0}; int have_tev = 0;
+    /* madeira-bcd xp-vm: what kind of faults those are. Elden Ring, build 45: the main
+     * thread spent 5-10 s inside one memcpy/memset at ~21k faults/s with no page-ins, so
+     * the faults are zero-fill, compressor or cache hits; HOST_VM_INFO64 (whole device)
+     * counts each kind, TASK_VM_INFO says how much of this process is compressed. */
+    vm_statistics64_data_t hvs = {0}, phvs = {0}; int have_hvs = 0;
     uint64_t t_start, t_prev;
     uint32_t gen = 0; int have_ru = 0, have_pe = 0, used = 0, ru_rc;
     char n0[32] = "?", n1[32] = "?"; size_t sz; int nlev = 0;
@@ -2618,6 +2623,32 @@ static void ios_xprobe_main( void )
                                   (unsigned)(tev.pageins - ptev.pageins), (unsigned)(tev.syscalls_unix - ptev.syscalls_unix),
                                   (unsigned)(tev.syscalls_mach - ptev.syscalls_mach), (unsigned)(tev.csw - ptev.csw) );
                     ptev = tev; have_tev = 1;
+                }
+            }
+            {   /* madeira-bcd xp-vm (see the declaration) */
+                static mach_port_t host;   /* once: every mach_host_self() adds a send right */
+                mach_msg_type_number_t hcnt = HOST_VM_INFO64_COUNT, vcnt = TASK_VM_INFO_COUNT;
+                task_vm_info_data_t tvi;
+                int ln = (int)strlen( line );
+                if (!host) host = mach_host_self();
+                if (host_statistics64( host, HOST_VM_INFO64, (host_info64_t)&hvs, &hcnt ) == KERN_SUCCESS)
+                {
+                    if (have_hvs && ln < (int)sizeof(line) - 128)
+                    {
+                        unsigned cmp_mb = 0;
+                        if (task_info( mach_task_self(), TASK_VM_INFO, (task_info_t)&tvi, &vcnt ) == KERN_SUCCESS)
+                            cmp_mb = (unsigned)(tvi.compressed >> 20);
+                        snprintf( line + ln, sizeof(line) - ln,
+                                  " | vm zf=%u dcmp=%u cmp=%u pin=%u react=%u flt=%u tcmpMB=%u freeMB=%u",
+                                  (unsigned)(hvs.zero_fill_count - phvs.zero_fill_count),
+                                  (unsigned)(hvs.decompressions - phvs.decompressions),
+                                  (unsigned)(hvs.compressions - phvs.compressions),
+                                  (unsigned)(hvs.pageins - phvs.pageins),
+                                  (unsigned)(hvs.reactivations - phvs.reactivations),
+                                  (unsigned)(hvs.faults - phvs.faults), cmp_mb,
+                                  (unsigned)(((uint64_t)hvs.free_count * vm_kernel_page_size) >> 20) );
+                    }
+                    phvs = hvs; have_hvs = 1;
                 }
             }
             wine_log_write( "%s", line );

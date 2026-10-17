@@ -26,8 +26,44 @@
 
 extern "C" long long madeira_ooz_decompress(const unsigned char *src, size_t src_len,
                                             unsigned char *dst, size_t dst_len);
+extern "C" void *madeira_ooz_decoder_create(void);
+extern "C" long long madeira_ooz_decompress_dec(void *decoder, const unsigned char *src, size_t src_len,
+                                                unsigned char *dst, size_t dst_len);
 
 #define PAD 64
+
+/* ---- reusable decode slots -------------------------------------------------------------
+ * A fresh decoder (432 KB) plus fresh input and output buffers on every call means fresh
+ * pages on every call: outputs of a megabyte or more are their own reservation, which
+ * Madeira's swap tier backs with file pages, and the last run measured ~21k such first-touch
+ * faults a second (~47 us each) on threads copying into new memory. A slot keeps its decoder
+ * and buffers, so after the first calls a decode touches only pages it already has. Four
+ * slots: the game decodes on CR2.Decomp_0 and now and then elsewhere; a call that finds all
+ * four busy, or needs more than SLOT_MAX, takes the one-shot path as before. */
+#define NSLOTS 4
+#define SLOT_MAX ((size_t)64 << 20)
+struct slot {
+    volatile LONG busy;
+    void *dec;
+    unsigned char *in, *out;
+    size_t in_cap, out_cap;
+};
+static struct slot g_slots[NSLOTS];
+
+static struct slot *slot_take(void) {
+    for (int i = 0; i < NSLOTS; i++)
+        if (InterlockedCompareExchange(&g_slots[i].busy, 1, 0) == 0) return &g_slots[i];
+    return NULL;
+}
+static void slot_give(struct slot *s) { InterlockedExchange(&s->busy, 0); }
+/* Room for need bytes (padding included), grown in 1 MB steps; on failure the slot keeps nothing. */
+static unsigned char *slot_room(unsigned char **p, size_t *cap, size_t need) {
+    if (*cap >= need) return *p;
+    free(*p);
+    *cap = (need + ((size_t)1 << 20) - 1) & ~(((size_t)1 << 20) - 1);
+    if (!(*p = (unsigned char *)malloc(*cap))) *cap = 0;
+    return *p;
+}
 
 /* ---- log: Wine's own debug output, as madeira_d3d12's d3d12_log ---------------- */
 static void mlog(const char *fmt, ...) {
@@ -149,6 +185,31 @@ extern "C" intptr_t OodleLZ_Decompress(intptr_t comp, intptr_t compLen, intptr_t
     else if (phase != 3) why = "threaded phase";
     else if (callback) why = "progress callback";
     else if ((int)checkCRC) why = "CRC requested";
+    if (!why && (size_t)compLen + PAD <= SLOT_MAX && (size_t)rawLen + PAD <= SLOT_MAX) {
+        struct slot *s = slot_take();
+        if (s) {
+            LARGE_INTEGER t0, t1;
+            long long n = -1;
+            QueryPerformanceCounter(&t0);
+            if (!s->dec) s->dec = madeira_ooz_decoder_create();
+            unsigned char *in = slot_room(&s->in, &s->in_cap, (size_t)compLen + PAD);
+            unsigned char *out = slot_room(&s->out, &s->out_cap, (size_t)rawLen + PAD);
+            int ready = s->dec && in && out;
+            if (ready) {
+                memcpy(in, (const void *)comp, (size_t)compLen);
+                memset(in + compLen, 0, PAD);
+                n = madeira_ooz_decompress_dec(s->dec, in, (size_t)compLen, out, (size_t)rawLen);
+                if (n == rawLen) memcpy((void *)raw, out, (size_t)rawLen);
+            }
+            slot_give(s);
+            if (n == rawLen) {
+                QueryPerformanceCounter(&t1);
+                note_native(rawLen, t1.QuadPart - t0.QuadPart);
+                return rawLen;
+            }
+            why = ready ? "stream the native decoder does not take" : "no memory";
+        }
+    }
     if (!why) {
         LARGE_INTEGER t0, t1;
         QueryPerformanceCounter(&t0);
