@@ -3701,10 +3701,32 @@ static int mad_rp_carry_on(void) {
     }
     return g_rp_carry;
 }
+/* madeira-bcd rp-carry-barriers (default 0; opt-in, with rp-carry = 1): a
+ * transition barrier that names only textures and buffers the pass does not
+ * draw to may stand between the two lists too. Within one list a barrier
+ * already leaves the render pass open (barrier-render = 0, fence modes 1 and 5);
+ * this gives the list boundary the same rule, but stricter: a barrier naming
+ * one of the pass's own attachments, a UAV or aliasing barrier, or one with
+ * more than 8 resources still ends it. */
+static int g_rp_carry_bar = -1;
+static int mad_rp_carry_bar_on(void) {
+    if (g_rp_carry_bar < 0) {
+        g_rp_carry_bar = mad_cfg_int_pe("rp-carry-barriers", 0) ? 1 : 0;
+        if (g_rp_carry_bar) d3d12_log("[madeira-d3d12] rp-carry-barriers = 1: a barrier on textures a pass does not draw to does not keep rp-carry from joining two lists\n");
+    }
+    return g_rp_carry_bar;
+}
 /* Commands that may stand between the two draws a carried pass joins. */
 static int mad_rp_plain(const struct mad_cmd *c, struct mad_resource *const *rt, UINT nrt, const struct mad_resource *depth) {
-    UINT i;
+    UINT i, j;
     switch (c->kind) {
+    case MC_BARRIER:   /* madeira-bcd rp-carry-barriers */
+        if (c->u.barrier.all || !mad_rp_carry_bar_on()) return 0;
+        for (i = 0; i < c->u.barrier.n && i < 8; i++) {
+            if (depth && c->u.barrier.res[i] == depth) return 0;
+            for (j = 0; j < nrt; j++) if (c->u.barrier.res[i] == rt[j]) return 0;
+        }
+        return 1;
     case MC_PSO: case MC_ROOT: case MC_HEAPS: case MC_VP: case MC_SCISSOR: case MC_TOPO: case MC_IB: case MC_VB:
     case MC_ROOTSIG: case MC_ROOT_CONST: case MC_STENCIL_REF: case MC_CROOTSIG: case MC_CROOT: case MC_CROOT_CONST:
     case MC_BLEND_FACTOR: case MC_CBV_LATCH: case MC_DISCARD:
