@@ -20344,9 +20344,9 @@ static unsigned long long ios_swap_img_bytes, ios_swap_img_peak, ios_swap_img_ba
  * not backed, and phys_footprint. The line is built in a stack buffer and
  * written with write(2); nothing here allocates. */
 enum { IOS_SW_BACKED, IOS_SW_SMALL, IOS_SW_BAND, IOS_SW_FEXJIT, IOS_SW_PROT, IOS_SW_VIEW,
-       IOS_SW_RECOMMIT, IOS_SW_PRESENT, IOS_SW_REFUSED, IOS_SW_MAPFAIL, IOS_SW_CHURN, IOS_SW_REASONS };
+       IOS_SW_RECOMMIT, IOS_SW_PRESENT, IOS_SW_REFUSED, IOS_SW_MAPFAIL, IOS_SW_CHURN, IOS_SW_ANON, IOS_SW_REASONS };
 static const char * const ios_swap_reason_name[IOS_SW_REASONS] =
-    { "backed", "small", "band", "fex/jit", "prot", "view", "recommit", "present", "refused", "mapfail", "churn" };
+    { "backed", "small", "band", "fex/jit", "prot", "view", "recommit", "present", "refused", "mapfail", "churn", "anon" };
 static int         ios_swap_v2;               /* blocks, wide or broad; 0 = classic */
 static int         ios_swap_wide;
 static int         ios_swap_broad;            /* ml1257 */
@@ -20367,9 +20367,46 @@ static unsigned ios_swap_nchurny;   /* sizes left anonymous */
 #define IOS_SWAP_CHURN_MIN_YOUNG 8
 /* ml1221: broad, the bytes of fresh reservations NOT taken whole, by reason (the
  * commit and reserve rules may still back parts of them). In the census. */
-enum { IOS_SWK_PROT, IOS_SWK_VIEW, IOS_SWK_SMALL, IOS_SWK_BIG, IOS_SWK_FEXJIT, IOS_SWK_OVERLAP, IOS_SWK_CHURN, IOS_SWK_REASONS };
+enum { IOS_SWK_PROT, IOS_SWK_VIEW, IOS_SWK_SMALL, IOS_SWK_BIG, IOS_SWK_FEXJIT, IOS_SWK_OVERLAP, IOS_SWK_CHURN, IOS_SWK_ANON, IOS_SWK_REASONS };
 static const char * const ios_swap_skip_name[IOS_SWK_REASONS] =
-    { "prot", "view", "small", "big", "fex/jit/band", "overlap", "churn" };
+    { "prot", "view", "small", "big", "fex/jit/band", "overlap", "churn", "anon" };
+/* madeira-bcd swap-anon-resv: MADEIRA_SWAP_ANON_RESV = SIZE_MB#N[,SIZE_MB#N...] keeps the Nth
+ * fresh reservation of exactly SIZE_MB (counting only those broad would back) in ordinary
+ * memory, and every commit inside it too. Elden Ring, build 47: all write-fault stalls were in
+ * its four 1 GB heaps, which it reserves in the same order every run, and the third (made as
+ * the world loads) took 112 of 165 probe hits; with the whole tier off the footprint passed
+ * iOS's ~6.1 GB limit, so only the hottest heap leaves the file. */
+static struct { size_t size; unsigned nth, seen; } ios_swap_anon_rule[8];
+static unsigned ios_swap_anon_nrule;
+static struct { uintptr_t base; size_t len; } ios_swap_anon_range[16];
+static unsigned ios_swap_anon_nrange;
+static int ios_swap_in_anon( uintptr_t b, size_t size )
+{
+    unsigned i;
+    for (i = 0; i < ios_swap_anon_nrange; i++)
+        if (b < ios_swap_anon_range[i].base + ios_swap_anon_range[i].len && ios_swap_anon_range[i].base < b + size) return 1;
+    return 0;
+}
+/* A reservation broad would back: is it one a rule names? Counts it either way. */
+static int ios_swap_anon_take( const void *base, size_t size )
+{
+    unsigned i;
+    for (i = 0; i < ios_swap_anon_nrule; i++)
+    {
+        if (ios_swap_anon_rule[i].size != size) continue;
+        if (++ios_swap_anon_rule[i].seen != ios_swap_anon_rule[i].nth) continue;
+        if (ios_swap_anon_nrange < 16)
+        {
+            ios_swap_anon_range[ios_swap_anon_nrange].base = (uintptr_t)base;
+            ios_swap_anon_range[ios_swap_anon_nrange].len = size;
+            ios_swap_anon_nrange++;
+        }
+        dprintf( 2, "[swap] anon-resv: reservation %p+0x%zx (number %u of %zu MB) stays in ordinary memory (MADEIRA_SWAP_ANON_RESV)\n",
+                 base, size, ios_swap_anon_rule[i].nth, size >> 20 );
+        return 1;
+    }
+    return 0;
+}
 static unsigned long long ios_swap_skip_bytes[IOS_SWK_REASONS];
 static void ios_swap_tick( int force );
 static unsigned long long ios_swap_footprint_mb( void );   /* after the core: Mach */
@@ -20443,6 +20480,28 @@ static void ios_swap_init( void )
         if (ios_swap_willneed_max)
             dprintf( 2, "[swap] willneed: fresh commits of up to %zu MB in file pages are read ahead (MADEIRA_SWAP_WILLNEED)\n",
                      ios_swap_willneed_max >> 20 );
+    }
+    {   /* madeira-bcd swap-anon-resv: "SIZE_MB#N[,SIZE_MB#N...]" */
+        const char *r = getenv( "MADEIRA_SWAP_ANON_RESV" );
+        while (r && *r && ios_swap_anon_nrule < 8)
+        {
+            char *e;
+            unsigned long long mb = strtoull( r, &e, 10 ), nth;
+            if (e == r || *e != '#') break;
+            r = e + 1;
+            nth = strtoull( r, &e, 10 );
+            if (e == r) break;
+            r = e;
+            if (mb && nth)
+            {
+                ios_swap_anon_rule[ios_swap_anon_nrule].size = (size_t)mb << 20;
+                ios_swap_anon_rule[ios_swap_anon_nrule].nth = (unsigned)nth;
+                ios_swap_anon_rule[ios_swap_anon_nrule].seen = 0;
+                dprintf( 2, "[swap] anon-resv: reservation number %llu of %llu MB will stay in ordinary memory\n", nth, mb );
+                ios_swap_anon_nrule++;
+            }
+            if (*r == ',') r++;
+        }
     }
     ios_swap_logical = ios_swap_cap;
     if (ios_swap_broad && ios_swap_logical < (128ull << 30))
@@ -20613,6 +20672,7 @@ static int ios_swap_why( const void *base, size_t size, unsigned int vprot, stru
     else if (!ios_swap_wide && (b < 0x7000000000ULL || b >= 0x7c00000000ULL)) return IOS_SW_BAND;
     if (size < ios_swap_min) return IOS_SW_SMALL;
     if (ios_swap_churny( size )) { ios_swap_churn_skips++; return IOS_SW_CHURN; }   /* ml1258 */
+    if (ios_swap_anon_nrange && ios_swap_in_anon( b, size )) return IOS_SW_ANON;   /* madeira-bcd swap-anon-resv */
     return IOS_SW_BACKED;
 }
 static const char *ios_swap_map_tag = "";   /* ml1257: the "backed" log line names whole reservations */
@@ -20975,6 +21035,8 @@ static int ios_swap_whole_resv( struct file_view *view, unsigned int vprot )
     if (ios_swap_n && ios_swap_overlaps( view->base, view->size )) { ios_swap_skip_bytes[IOS_SWK_OVERLAP] += view->size; return 0; }
     if (ios_swap_churny( view->size ))   /* ml1258 */
     { ios_swap_churn_skips++; ios_swap_skip_bytes[IOS_SWK_CHURN] += view->size; return 0; }
+    if (ios_swap_anon_nrule && ios_swap_anon_take( view->base, view->size ))   /* madeira-bcd swap-anon-resv */
+    { ios_swap_skip_bytes[IOS_SWK_ANON] += view->size; return 0; }
     ios_swap_map_tag = " (whole reservation, ml1257)";
     why = ios_swap_map( view->base, view->size, get_unix_prot( vprot ) );
     ios_swap_map_tag = "";

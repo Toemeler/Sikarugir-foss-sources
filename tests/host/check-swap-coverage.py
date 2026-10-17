@@ -434,6 +434,33 @@ static void test_reserve( void )
     munmap( r, 16u << 20 );
 }
 
+/* madeira-bcd swap-anon-resv: the Nth reservation of a named size stays ordinary memory,
+ * commits inside it are not backed, and every other reservation is backed as before. */
+static void test_anon_resv( void )
+{
+    struct file_view v = { 0, 0, 0 };
+    unsigned rw = VPROT_READ | VPROT_WRITE;
+    char *a = region( 0x7064000000ULL, 8u << 20 ), *b = region( 0x7068000000ULL, 8u << 20 ), *c = region( 0x706c000000ULL, 8u << 20 );
+    env( "broad", NULL, NULL );
+    reset_tier();
+    ios_swap_anon_nrule = 1; ios_swap_anon_nrange = 0;
+    ios_swap_anon_rule[0].size = 8u << 20; ios_swap_anon_rule[0].nth = 2; ios_swap_anon_rule[0].seen = 0;
+    v.base = a; v.size = 8u << 20;
+    CHECK( ios_swap_whole_resv( &v, rw ) == 1 && ios_swap_n == 1, "anon-resv: the 1st 8 MB reservation is backed whole" );
+    v.base = b;
+    CHECK( ios_swap_whole_resv( &v, rw ) == 0 && ios_swap_n == 1 && ios_swap_anon_nrange == 1, "anon-resv: the 2nd stays ordinary memory" );
+    CHECK( ios_swap_why( b + 0x100000, 2u << 20, rw, &v ) == IOS_SW_ANON, "anon-resv: a commit inside it is not backed" );
+    CHECK( ios_swap_skip_bytes[IOS_SWK_ANON] == (8u << 20), "anon-resv: census counts the skipped reservation" );
+    v.base = c;
+    CHECK( ios_swap_whole_resv( &v, rw ) == 1 && ios_swap_n == 2, "anon-resv: the 3rd is backed again" );
+    CHECK( ios_swap_why( c + 0x100000, 2u << 20, rw, &v ) == IOS_SW_BACKED, "anon-resv: other ranges keep the normal rule" );
+    ios_swap_release_range( a, 8u << 20, 0 );
+    ios_swap_release_range( c, 8u << 20, 0 );
+    CHECK( ios_swap_n == 0 && ios_swap_bump == 0, "anon-resv: releases return all file space" );
+    ios_swap_anon_nrule = 0; ios_swap_anon_nrange = 0; ios_swap_skip_bytes[IOS_SWK_ANON] = 0;
+    munmap( a, 8u << 20 ); munmap( b, 8u << 20 ); munmap( c, 8u << 20 );
+}
+
 static void test_off( void )
 {
     struct file_view v = { 0, 0, 0 };
@@ -468,6 +495,7 @@ int main( int argc, char **argv )
     test_commit_copyback();
     test_classic_commit();
     test_reserve();
+    test_anon_resv();
     env( "blocks", NULL, NULL );
     ios_swap_tick( 1 );
     printf( "%d failures\n", bad );
