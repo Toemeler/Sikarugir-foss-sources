@@ -8325,6 +8325,55 @@ static struct wmtcmd_base *mad_dd_buf(struct mad_dd *d, struct wmtcmd_render_set
     d->b[st][s->index].buf = s->buffer; d->b[st][s->index].off = s->offset;
     return (struct wmtcmd_base *)s;
 }
+/* madeira-bcd ui-scale: a scaled (or mixed) pass's attachments and the textures
+ * its draw samples (SRV tables), so the log names the UI's own texture: the
+ * game blends it into the back buffer (BlendUI_SDR2SDR, test 12). */
+static void mad_ui_log_inputs(struct mad_exec *e) {
+    const struct mad_rootsig *rs = e->rs;
+    unsigned i, ri, k;
+    for (i = 0; i < e->enc_nrt && i < 8; i++)
+        if (e->enc_rt[i])
+            d3d12_log("[ui-scale]   color %u = r#%u %llux%u format %u (Metal %ux%u)\n", i, e->enc_rt[i]->serial,
+                      (unsigned long long)e->enc_rt[i]->desc.Width, e->enc_rt[i]->desc.Height, (unsigned)e->enc_rt[i]->desc.Format,
+                      e->enc_rt[i]->width, e->enc_rt[i]->height);
+    if (e->enc_depth)
+        d3d12_log("[ui-scale]   depth = r#%u %llux%u format %u (Metal %ux%u)\n", e->enc_depth->serial,
+                  (unsigned long long)e->enc_depth->desc.Width, e->enc_depth->desc.Height, (unsigned)e->enc_depth->desc.Format,
+                  e->enc_depth->width, e->enc_depth->height);
+    if (!rs) return;
+    for (i = 0; i < rs->nparams && i < MAD_ROOT_PARAM_MAX; i++) {
+        const struct madeira_ir_root_param *p = &rs->params[i];
+        UINT64 va = e->root[i];
+        const struct mad_heap *h;
+        unsigned base, run = 0;
+        if (p->type != MADEIRA_IR_PARAM_TABLE) continue;
+        h = e->srv;
+        if (!h || !h->cpu || va < h->gpu_address || va >= h->gpu_address + (UINT64)h->count * sizeof(struct mad_descriptor)) continue;
+        base = (unsigned)((va - h->gpu_address) / sizeof(struct mad_descriptor));
+        for (ri = 0; ri < p->num_ranges; ri++) {
+            const struct madeira_ir_root_range *rg;
+            unsigned nd, off;
+            if (p->first_range + ri >= rs->nranges) break;
+            rg = &rs->ranges[p->first_range + ri];
+            nd = rg->num_descriptors;
+            if (nd == 0xffffffffu || nd > 16) nd = 16;
+            off = rg->table_offset != 0xffffffffu ? rg->table_offset : run;
+            run = off + nd;
+            if (rg->range_type != MADEIRA_IR_RANGE_SRV) continue;
+            for (k = 0; k < nd && base + off + k < h->count; k++) {
+                const struct mad_descriptor *de = &h->cpu[base + off + k];
+                struct mad_resource *r;
+                int xv = -1;
+                if (!de->texture_view_id || (de->metadata >> 63)) continue;
+                r = mad_texture_of_view(e->q->device, de->texture_view_id, &xv);
+                if (!r) continue;
+                d3d12_log("[ui-scale]   samples t%u space%u = r#%u %llux%u format %u (Metal %ux%u)%s\n", rg->base_register + k,
+                          rg->register_space, r->serial, (unsigned long long)r->desc.Width, r->desc.Height, (unsigned)r->desc.Format,
+                          r->width, r->height, r->ui_k ? " scaled" : "");
+            }
+        }
+    }
+}
 static void exec_draw(struct mad_exec *e, const struct mad_cmd *c) {
     struct wmtcmd_render_setpso c_pso;
     struct wmtcmd_render_draw_indirect c_di;
@@ -8496,6 +8545,7 @@ tess_go:
                           e->enc_mixed ? "mixed" : "scaled", e->enc_w, e->enc_h, e->pso->vs_name, e->pso->ps_name[0] ? e->pso->ps_name : "-",
                           e->has_vp ? e->vp.TopLeftX : 0.0f, e->has_vp ? e->vp.TopLeftY : 0.0f, e->has_vp ? e->vp.Width : 0.0f, e->has_vp ? e->vp.Height : 0.0f,
                           (long)e->sc.left, (long)e->sc.top, (long)e->sc.right, (long)e->sc.bottom, e->enc_nrt, e->enc_depth ? " + depth" : "");
+                mad_ui_log_inputs(e);
             }
         }
     }
@@ -13661,13 +13711,66 @@ static float mad_ui_k(void) {
     }
     return g_ui_k;
 }
-static float mad_ui_match(const D3D12_RESOURCE_DESC *desc) {
+/* Test 12 (build 52): the swapchain's buffers were scaled but no 16:9 canvas
+ * ever matched, and the only draw into the back buffer was
+ * SimpleVS_Single2DTexture|BlendUI_SDR2SDR over the whole 800x600: the game
+ * draws its UI into a texture of its own and blends it in, so the HUD was
+ * still rasterised at the game's size. Two explicit lists name that texture
+ * (and its depth/stencil) once a log shows which it is: ui-scale-serials =
+ * creation numbers (r#N in the [ui-scale] target lines; the game creates its
+ * targets in the same order every start) and ui-scale-sizes = WxH,... The
+ * 16:9 rule also works before the swapchain exists, against the screen. */
+static unsigned g_ui_ser[16]; static UINT g_ui_sz[8][2]; static int g_ui_nser = -1, g_ui_nsz;
+static UINT g_ui_sw, g_ui_sh;
+static SRWLOCK g_ui_lock = SRWLOCK_INIT;
+static void mad_ui_lists(void) {
+    char v[256], *q;
+    AcquireSRWLockExclusive(&g_ui_lock);
+    if (g_ui_nser < 0) {
+        int n = 0;
+        v[0] = 0;
+        mad_cfg_str_pe("ui-scale-serials", v, sizeof v);   /* with ui-scale: these resources' Metal textures are K times larger too (creation numbers r#N, comma list) */
+        for (q = v; *q && n < 16; ) {
+            while (*q && (*q < '0' || *q > '9')) q++;
+            if (!*q) break;
+            g_ui_ser[n++] = (unsigned)strtoul(q, &q, 10);
+        }
+        v[0] = 0;
+        mad_cfg_str_pe("ui-scale-sizes", v, sizeof v);   /* with ui-scale: render/depth targets of these sizes are K times larger too (WxH, comma list) */
+        for (q = v; *q && g_ui_nsz < 8; ) {
+            unsigned long w, h;
+            while (*q && (*q < '0' || *q > '9')) q++;
+            if (!*q) break;
+            w = strtoul(q, &q, 10);
+            if (*q != 'x' && *q != 'X') continue;
+            h = strtoul(q + 1, &q, 10);
+            if (w && h) { g_ui_sz[g_ui_nsz][0] = (UINT)w; g_ui_sz[g_ui_nsz][1] = (UINT)h; g_ui_nsz++; }
+        }
+        {   /* the screen, for a canvas created before the swapchain (user32 looked up, not imported) */
+            typedef int (WINAPI *metrics_fn)(int);
+            HMODULE u = GetModuleHandleW(L"user32.dll");
+            metrics_fn gsm = u ? (metrics_fn)(void *)GetProcAddress(u, "GetSystemMetrics") : NULL;
+            if (gsm) { g_ui_sw = (UINT)gsm(0 /* SM_CXSCREEN */); g_ui_sh = (UINT)gsm(1 /* SM_CYSCREEN */); }
+        }
+        if (n || g_ui_nsz) d3d12_log("[ui-scale] also scaled: %d creation number(s) (first r#%u), %d size(s) (first %ux%u); screen %ux%u\n",
+                                     n, n ? g_ui_ser[0] : 0u, g_ui_nsz, g_ui_nsz ? g_ui_sz[0][0] : 0u, g_ui_nsz ? g_ui_sz[0][1] : 0u, g_ui_sw, g_ui_sh);
+        g_ui_nser = n;
+    }
+    ReleaseSRWLockExclusive(&g_ui_lock);
+}
+static float mad_ui_match(const D3D12_RESOURCE_DESC *desc, unsigned serial) {
     float k = mad_ui_k();
+    UINT rw, rh;
+    int i;
     if (!k || desc->Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D || desc->DepthOrArraySize > 1 || desc->MipLevels != 1 ||
         desc->SampleDesc.Count > 1 || !(desc->Flags & (D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET | D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL)))
         return 0.0f;
     if (g_ui_bb) return k;
-    if (g_ui_w && desc->Width == g_ui_w && desc->Height != g_ui_h) {
+    mad_ui_lists();
+    for (i = 0; i < g_ui_nser; i++) if (g_ui_ser[i] == serial) return k;
+    for (i = 0; i < g_ui_nsz; i++) if (desc->Width == g_ui_sz[i][0] && desc->Height == g_ui_sz[i][1]) return k;
+    rw = g_ui_w ? g_ui_w : g_ui_sw; rh = g_ui_w ? g_ui_h : g_ui_sh;
+    if (rw && desc->Width == rw && desc->Height != rh) {
         long want = (long)(desc->Width * 9 / 16), h = (long)desc->Height;
         if (h - want <= 4 && want - h <= 4) return k;
     }
@@ -13701,7 +13804,16 @@ static HRESULT mad_create_resource_at(struct mad_device *d, D3D12_HEAP_TYPE heap
         enum WMTPixelFormat pf;
         int is_depth;
         if (!mad_texinfo_from_desc(desc, &ti, &pf, &is_depth)) { free(r); mad_refuse_log(desc, heap_type, "texture format has no Metal mapping"); return E_NOTIMPL; }
-        r->ui_k = mad_ui_match(desc);   /* madeira-bcd ui-scale: a larger texture, never in the game's heap */
+        r->ui_k = mad_ui_match(desc, r->serial);   /* madeira-bcd ui-scale: a larger texture, never in the game's heap */
+        if (mad_ui_k() && desc->Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE2D &&
+            (desc->Flags & (D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET | D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL))) {
+            static volatile LONG said_t;   /* every render/depth target, so a log names the UI's own (ui-scale-serials) */
+            if (InterlockedIncrement(&said_t) <= 200)
+                d3d12_log("[ui-scale] target r#%u %llux%u format %u flags 0x%x mips %u layers %u samples %u%s%s\n", r->serial,
+                          (unsigned long long)desc->Width, desc->Height, (unsigned)desc->Format, (unsigned)desc->Flags,
+                          (unsigned)desc->MipLevels, (unsigned)desc->DepthOrArraySize, (unsigned)desc->SampleDesc.Count,
+                          ph ? " placed" : "", r->ui_k ? " -> SCALED" : "");
+        }
         if (r->ui_k) {
             ti.width = (uint32_t)((float)desc->Width * r->ui_k + 0.5f);
             ti.height = (uint32_t)((float)desc->Height * r->ui_k + 0.5f);
