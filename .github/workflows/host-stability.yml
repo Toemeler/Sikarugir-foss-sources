@@ -15,12 +15,18 @@ jobs:
         run: python3 tests/host/check-oodle-native.py --sanitize
       - name: Native Oodle loader opt-in and original fallback routing
         run: python3 tests/host/check-oodle-routing.py
-      - name: Swap tier core (coverage, free extents, census, willneed)
-        run: python3 tests/host/check-swap-coverage.py
       - name: Active-root resource lifetime under sanitizers
         run: python3 tests/host/check-root-residency.py --sanitize
       - name: Recommended controller mode and persistence
         run: python3 tests/host/check-game-recommendations.py --require-swift
+  swap-tier:
+    name: Swap tier core (Linux headers)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Coverage, free extents, census and willneed
+        run: python3 tests/host/check-swap-coverage.py
   windows-oodle:
     name: Oodle Windows ABI and portable intrinsics
     runs-on: windows-latest
