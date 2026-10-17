@@ -247,6 +247,7 @@ static int g_view_census = -1;     /* madeira-bcd view-census (mad_vc_on) */
  * vanish before its draw, in depth, in the G-buffer, or only in lighting" can
  * then be answered from a Mac (build/tools/capture-to-png.py). */
 static int g_capture_on; static unsigned g_capture_left; static UINT64 g_capture_frame;
+static float g_ui_k;   /* madeira-bcd ui-scale: defined with mad_ui_k() */
 struct mad_capbuf { obj_handle_t buf; void *cpu; UINT64 bytes; UINT w, h, bpr, pf, dxgi; unsigned enc, idx; char kind[8]; char name[40]; char what[64]; char alias[256]; void *own; };
 /* madeira-bcd: CAP contact sheets. Attachments and compute UAV outputs of the
  * captured frame become numbered thumbnails on PNG sheets (Documents/capture/
@@ -1151,6 +1152,7 @@ struct mad_resource {
     struct mad_memheap *placed_heap;   /* ml1145: set when the storage IS the heap's, at the placement offset */
     UINT64 placed_off, placed_size;    /* madeira-bcd: where in that heap, and how much Metal took */
     unsigned serial;                   /* madeira-bcd: creation number, names a resource in capture / alias logs */
+    float ui_k;                        /* madeira-bcd ui-scale: the Metal texture is ui_k times desc (0 = not scaled) */
     void *own_mem;                     /* ml1154: our VirtualAlloc'd storage behind a CPU-visible buffer */
     unsigned track_seq;                /* ml1157: creation order in the address index (newest alias wins) */
     obj_handle_t buffer;
@@ -2037,6 +2039,7 @@ struct mad_exec {
     struct mad_rtvp rtp[8], dp; struct mad_rtvp enc_rtp[8], enc_dp;            /* ml925: bound / encoded sub-views */
     struct mad_resource *enc_rt[8]; UINT enc_nrt; struct mad_resource *enc_depth; /* what the open encoder has */
     UINT enc_w, enc_h;              /* ml934b: and the area it was created with */
+    float enc_k;                    /* madeira-bcd ui-scale: the open pass's targets are this much larger than the game thinks */
     struct { struct mad_resource *res; float rgba[4]; float depth; UINT8 stencil; UINT8 flags; int is_depth; struct mad_rtvp v; } pend[16];
     unsigned npend;
     struct mad_pso *pso;
@@ -4417,6 +4420,27 @@ static int exec_begin_render(struct mad_exec *e) {
         for (i = 0; i < e->nrt; i++) if (e->rt[i]) exec_disc_forget(e, e->rt[i]);   /* this pass defines them again */
         if (e->depth) exec_disc_forget(e, e->depth);
     }
+    {   /* madeira-bcd ui-scale: a pass is scaled only when all its attachments are, by the same K */
+        float uk = -1.0f; int mixed = 0; UINT mw = 0, mh = 0;
+        for (i = 0; i <= e->nrt; i++) {
+            struct mad_resource *a = i < e->nrt ? e->rt[i] : e->depth;
+            UINT lv = i < e->nrt ? e->rtp[i].level : e->dp.level, aw, ah;
+            if (!a || !a->texture) continue;
+            aw = a->width >> lv; ah = a->height >> lv;
+            if (!aw) aw = 1;
+            if (!ah) ah = 1;
+            if (!mw || aw < mw) mw = aw;
+            if (!mh || ah < mh) mh = ah;
+            if (uk < 0.0f) uk = a->ui_k; else if (a->ui_k != uk) mixed = 1;
+        }
+        e->enc_k = (uk > 0.0f && !mixed) ? uk : 0.0f;
+        if (mixed) {
+            static volatile LONG said;
+            w = mw; h = mh;
+            if (InterlockedIncrement(&said) <= 16)
+                d3d12_log("[ui-scale] a pass mixes scaled and unscaled targets: drawn unscaled at %ux%u\n", w, h);
+        }
+    }
     e->rp_late = 0;   /* madeira-bcd rp-discard: a texture the game discards: the store is decided when the pass ends */
     if (mad_rp_discard_on() && !g_capture_on && exec_rp_late_want(e) && mad_rp_late_ok()) {
         for (i = 0; i < e->nrt; i++) if (rpi.colors[i].texture) rpi.colors[i].store_action = WMTStoreActionUnknown;
@@ -5874,6 +5898,14 @@ static void exec_clear_rects(struct mad_exec *e, const struct mad_list *l, const
             memset(&c_sc[j], 0, sizeof c_sc[j]); c_sc[j].type = WMTRenderCommandSetScissorRect;
             c_sc[j].scissor_rect.x = q[0]; c_sc[j].scissor_rect.y = q[1];
             c_sc[j].scissor_rect.width = q[2] - q[0]; c_sc[j].scissor_rect.height = q[3] - q[1];
+            if (r->ui_k > 0.0f) {   /* madeira-bcd ui-scale: the rectangle on the larger texture */
+                UINT64 x0 = (UINT64)((float)q[0] * r->ui_k), y0 = (UINT64)((float)q[1] * r->ui_k);
+                UINT64 x1 = (UINT64)((float)q[2] * r->ui_k + 0.999f), y1 = (UINT64)((float)q[3] * r->ui_k + 0.999f);
+                if (x1 > w) x1 = w;
+                if (y1 > h) y1 = h;
+                c_sc[j].scissor_rect.x = x0; c_sc[j].scissor_rect.y = y0;
+                c_sc[j].scissor_rect.width = x1 > x0 ? x1 - x0 : 0; c_sc[j].scissor_rect.height = y1 > y0 ? y1 - y0 : 0;
+            }
             memset(&c_draw[j], 0, sizeof c_draw[j]); c_draw[j].type = WMTRenderCommandDraw;
             c_draw[j].primitive_type = WMTPrimitiveTypeTriangle; c_draw[j].vertex_start = 0; c_draw[j].vertex_count = 3;
             c_draw[j].instance_count = layers; c_draw[j].base_instance = 0;
@@ -8319,8 +8351,9 @@ tess_go:
 #define MAD_APPEND(node) do { tail->next.ptr = (node); tail = (struct wmtcmd_base *)(node); } while (0)
     if (e->has_vp) {
         memset(&c_vp, 0, sizeof c_vp); c_vp.type = WMTRenderCommandSetViewport;
-        c_vp.viewport.originX = e->vp.TopLeftX; c_vp.viewport.originY = e->vp.TopLeftY;
-        c_vp.viewport.width = e->vp.Width; c_vp.viewport.height = e->vp.Height;
+        double vk = e->enc_k > 0.0f ? (double)e->enc_k : 1.0;   /* madeira-bcd ui-scale */
+        c_vp.viewport.originX = e->vp.TopLeftX * vk; c_vp.viewport.originY = e->vp.TopLeftY * vk;
+        c_vp.viewport.width = e->vp.Width * vk; c_vp.viewport.height = e->vp.Height * vk;
         c_vp.viewport.znear = e->vp.MinDepth; c_vp.viewport.zfar = e->vp.MaxDepth;
         if (!dd || mad_dd_vp(dd, &c_vp.viewport)) MAD_APPEND(&c_vp);
     }
@@ -8330,6 +8363,12 @@ tess_go:
         UINT th = e->enc_nrt && e->enc_rt[0] ? e->enc_rt[0]->height : (e->enc_depth ? e->enc_depth->height : 0);
         LONG x0 = e->sc.left < 0 ? 0 : e->sc.left, y0 = e->sc.top < 0 ? 0 : e->sc.top;
         LONG x1 = e->sc.right, y1 = e->sc.bottom;
+        if (e->enc_k > 0.0f) {   /* madeira-bcd ui-scale: the scissor covers the same part of the larger target */
+            x0 = (LONG)((float)x0 * e->enc_k); y0 = (LONG)((float)y0 * e->enc_k);
+            x1 = (LONG)((float)x1 * e->enc_k + 0.999f); y1 = (LONG)((float)y1 * e->enc_k + 0.999f);
+        }
+        if (e->enc_w && (!tw || tw > e->enc_w)) tw = e->enc_w;   /* madeira-bcd ui-scale: the pass's own area (a mixed pass is smaller) */
+        if (e->enc_h && (!th || th > e->enc_h)) th = e->enc_h;
         if (tw && x1 > (LONG)tw) x1 = (LONG)tw;
         if (th && y1 > (LONG)th) y1 = (LONG)th;
         if (x1 > x0 && y1 > y0) {
@@ -8967,6 +9006,17 @@ static void exec_copy_aspect(struct mad_exec *e, const struct mad_cmd *c) {
 
 #define MAD_FILLPAT_BYTES (256u << 10)   /* ml1151: one exact UAV-clear pattern buffer */
 static void exec_copy(struct mad_exec *e, const struct mad_cmd *c) {
+    if (g_ui_k > 0.0f) {   /* madeira-bcd ui-scale: a copy names game-sized regions; on a scaled texture it covers part of it */
+        const struct mad_resource *a = NULL, *b = NULL;
+        if (c->kind == MC_COPY_T2T) { a = c->u.tt.src; b = c->u.tt.dst; }
+        else if (c->kind == MC_COPY_B2T || c->kind == MC_COPY_T2B) a = c->u.bt.tex;
+        if ((a && a->ui_k > 0.0f) || (b && b->ui_k > 0.0f)) {
+            static volatile LONG said;
+            if (InterlockedIncrement(&said) <= 16)
+                d3d12_log("[ui-scale] copy kind %d touches a scaled texture (r#%u -> r#%u): game-sized region, not scaled\n",
+                          (int)c->kind, a ? a->serial : 0u, b ? b->serial : 0u);
+        }
+    }
     if (!exec_begin_blit(e)) { MAD_SKIP(e); return; }
     switch (c->kind) {   /* ml1116: the destination is written */
     case MC_FILL_BB: exec_note_write(e, c->u.fill.res); break;
@@ -13468,6 +13518,40 @@ static int mad_texinfo_from_desc(const D3D12_RESOURCE_DESC *desc, struct WMTText
     ti->options = WMTResourceStorageModePrivate;
     return 1;
 }
+/* madeira-bcd ui-scale (opt-in, madeira.cfg ui-scale = K, 1 < K <= 4). The swapchain's buffers
+ * and the render/depth targets of the game's UI canvas (the swapchain's width with a 16:9
+ * height) get Metal textures K times the size of the desc the game sees, and draws into them
+ * have viewport and scissor scaled by K, so the final composite and the HUD/menus rasterise at
+ * K times the game's resolution while its 3D targets keep their size. Elden Ring at 800x600
+ * (4:3 exe patch) on a 2752x2064 iPad: K = 3.44; its 3D targets are 800x600, its UI canvas
+ * 800x452. Passes that mix scaled and unscaled attachments draw unscaled at the smaller size;
+ * copies and compute writes into a scaled texture are named in the log. */
+static float g_ui_k = -1.0f;
+static UINT g_ui_w, g_ui_h;      /* the swapchain size the canvas rule compares with */
+static volatile LONG g_ui_bb;    /* set while mad_swap_make_buffers creates the swapchain's buffers */
+static float mad_ui_k(void) {
+    if (g_ui_k < 0.0f) {
+        char v[32] = "";
+        float k = 0.0f;
+        if (mad_cfg_str_pe("ui-scale", v, sizeof v) && v[0]) k = (float)atof(v);
+        if (k > 4.0f) k = 4.0f;
+        g_ui_k = k > 1.01f ? k : 0.0f;
+        if (g_ui_k) d3d12_log("[ui-scale] the swapchain and the UI canvas render at %.2fx (madeira.cfg ui-scale)\n", g_ui_k);
+    }
+    return g_ui_k;
+}
+static float mad_ui_match(const D3D12_RESOURCE_DESC *desc) {
+    float k = mad_ui_k();
+    if (!k || desc->Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D || desc->DepthOrArraySize > 1 || desc->MipLevels != 1 ||
+        desc->SampleDesc.Count > 1 || !(desc->Flags & (D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET | D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL)))
+        return 0.0f;
+    if (g_ui_bb) return k;
+    if (g_ui_w && desc->Width == g_ui_w && desc->Height != g_ui_h) {
+        long want = (long)(desc->Width * 9 / 16), h = (long)desc->Height;
+        if (h - want <= 4 && want - h <= 4) return k;
+    }
+    return 0.0f;
+}
 static HRESULT mad_create_resource_at(struct mad_device *d, D3D12_HEAP_TYPE heap_type,
                                       const D3D12_RESOURCE_DESC *desc, REFIID riid, void **out,
                                       struct mad_memheap *ph, UINT64 poff);
@@ -13496,7 +13580,12 @@ static HRESULT mad_create_resource_at(struct mad_device *d, D3D12_HEAP_TYPE heap
         enum WMTPixelFormat pf;
         int is_depth;
         if (!mad_texinfo_from_desc(desc, &ti, &pf, &is_depth)) { free(r); mad_refuse_log(desc, heap_type, "texture format has no Metal mapping"); return E_NOTIMPL; }
-        if (ph && ph->mtl) {   /* ml1145: inside the application's heap, at its offset */
+        r->ui_k = mad_ui_match(desc);   /* madeira-bcd ui-scale: a larger texture, never in the game's heap */
+        if (r->ui_k) {
+            ti.width = (uint32_t)((float)desc->Width * r->ui_k + 0.5f);
+            ti.height = (uint32_t)((float)desc->Height * r->ui_k + 0.5f);
+        }
+        if (ph && ph->mtl && !r->ui_k) {   /* ml1145: inside the application's heap, at its offset */
             UINT64 psz = 0, pal = 0;
             MTLDevice_heapTextureSizeAndAlign(d->mtl_device, &ti, &psz, &pal);
             if (psz && pal && !(poff % pal) && poff + psz <= ph->desc.SizeInBytes)
@@ -13533,6 +13622,13 @@ static HRESULT mad_create_resource_at(struct mad_device *d, D3D12_HEAP_TYPE heap
         LeaveCriticalSection(&d->view_lock);
         r->name = is_depth ? "DepthTarget" : (desc->Flags & D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET) ? "RenderTarget" : "Texture";
         r->is_depth = is_depth;
+        if (r->ui_k) {
+            static volatile LONG said;
+            if (InterlockedIncrement(&said) <= 24)
+                d3d12_log("[ui-scale] r#%u %s %llux%u format %u -> Metal %ux%u%s\n", r->serial, g_ui_bb ? "Backbuffer" : r->name,
+                          (unsigned long long)desc->Width, desc->Height, (unsigned)desc->Format, ti.width, ti.height,
+                          ph ? " (placed by the game: allocated on its own instead)" : "");
+        }
         r->has_stencil = (pf == WMTPixelFormatDepth32Float_Stencil8);
         r->samples = ti.sample_count;
         if (!r->placed_heap) {   /* ml1057; ml1145: a placed texture costs nothing beyond its heap */
@@ -19849,8 +19945,8 @@ static void mad_swap_apply_layer(struct mad_swapchain *s) {
     old_w = props.drawable_width; old_h = props.drawable_height; old_pf = (unsigned)props.pixel_format;
     props.device = s->dev->mtl_device;
     /* MetalFX upscaling: the drawable is the scaled size (fx_w x fx_h). */
-    props.drawable_width = s->fx_w ? s->fx_w : s->desc.Width;
-    props.drawable_height = s->fx_h ? s->fx_h : s->desc.Height;
+    props.drawable_width = s->fx_w ? s->fx_w : (s->nbuf && s->buffers[0] && s->buffers[0]->ui_k) ? s->buffers[0]->width : s->desc.Width;
+    props.drawable_height = s->fx_h ? s->fx_h : (s->nbuf && s->buffers[0] && s->buffers[0]->ui_k) ? s->buffers[0]->height : s->desc.Height;
     props.pixel_format = s->pf;
     props.framebuffer_only = false;
     props.display_sync_enabled = true;
@@ -19895,16 +19991,19 @@ static HRESULT mad_swap_make_buffers(struct mad_swapchain *s) {
     rd.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
     rd.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
     if (s->desc.BufferUsage & DXGI_USAGE_UNORDERED_ACCESS) rd.Flags |= D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+    g_ui_w = s->desc.Width; g_ui_h = s->desc.Height;   /* madeira-bcd ui-scale: the canvas rule's reference */
+    InterlockedExchange(&g_ui_bb, 1);
     for (i = 0; i < n; i++) {
         void *out = NULL;
         HRESULT hr = mad_create_resource(s->dev, D3D12_HEAP_TYPE_DEFAULT, &rd, &IID_ID3D12Resource, &out);
-        if (FAILED(hr)) { s->nbuf = i; mad_swap_release_buffers(s); return hr; }
+        if (FAILED(hr)) { InterlockedExchange(&g_ui_bb, 0); s->nbuf = i; mad_swap_release_buffers(s); return hr; }
         s->buffers[i] = (struct mad_resource *)out;
         s->buffers[i]->name = "Backbuffer";
     }
+    InterlockedExchange(&g_ui_bb, 0);
     s->nbuf = n;
     s->index = 0;
-    mad_swap_make_fx(s);   /* optional MetalFX upscaling: the drawable takes its output size */
+    if (!s->buffers[0]->ui_k) mad_swap_make_fx(s);   /* optional MetalFX upscaling (not with ui-scale: the buffers are already native) */
     /* The layer takes the same pixel format so the presenting blit is a plain
      * copy. framebuffer_only must be off: a framebuffer-only drawable cannot
      * be a blit destination. */
