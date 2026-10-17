@@ -19839,6 +19839,135 @@ static NTSTATUS map_file_into_view( struct file_view *view, int fd, size_t start
     return map_file_into_view_ex( view, fd, start, size, offset, vprot, removable, TRUE );
 }
 
+/* file-map core begin (tests/host/check-external-drive.py compiles from here to the end mark)
+ *
+ * Games on an external drive (docs/EXTERNAL_DRIVE.md): the app links a folder on
+ * a USB-C drive as D: (app/Madeira/ExternalDrive.swift), so an image or a file
+ * view of a game can come from a USB volume -- APFS through the kernel, exFAT
+ * through a user-space file system -- instead of the app's own data volume.
+ * map_file_into_view_ex and map_pe_header changed in three ways:
+ *
+ * 1. Which mmap() refusals fall back to reading. Upstream reads only after
+ *    EINVAL, ENOEXEC, ENODEV, EACCES and EPERM and fails the mapping with
+ *    STATUS_NO_MEMORY for any other errno, so a volume that refuses with
+ *    another one (ENOTSUP, EIO, ENXIO) failed the image load. A read-only or
+ *    copy-on-write view needs nothing a copy does not give it, so every errno
+ *    reads for those; a shared writable view, whose writes must reach the
+ *    file, fails exactly as upstream's did.
+ * 2. How the copy is read. One pread() of the whole range left a view of 2 GB
+ *    or more all zeros (Darwin's read(2) refuses a count above INT_MAX with
+ *    EINVAL), and a failed or short read went unnoticed. ios_fmap_read reads
+ *    in pieces of at most 1 GB, again after EINTR and after a short read.
+ * 3. A read that fails. On another volume than the prefix's (a drive that
+ *    was unplugged: EIO, ENXIO) the mapping fails with errno's status
+ *    (STATUS_DEVICE_NOT_READY, STATUS_NO_SUCH_DEVICE) instead of handing the
+ *    game zeros for its code or data. On the prefix's own volume a failure
+ *    keeps upstream's result (the range is left as the read left it), so no
+ *    game that runs from drive_c changes.
+ *
+ * Each kind of event is logged once per errno ([file-map]), with the volume
+ * it happened on (the app's [external-drive] line names that volume's file
+ * system: madeira_external_probe). */
+#ifndef IOS_FMAP_READ_CHUNK
+#define IOS_FMAP_READ_CHUNK ((size_t)1 << 30)
+#endif
+
+enum ios_fmap_after { IOS_FMAP_READ, IOS_FMAP_FAIL };
+
+/* After mmap() refused a mapping with `err`: read the range instead, or fail it
+ * with *status. `shared_writable`: a VPROT_WRITE view (MAP_SHARED, writable). */
+static enum ios_fmap_after ios_fmap_after_mmap_error( int err, int shared_writable, NTSTATUS *status )
+{
+    if (!shared_writable) return IOS_FMAP_READ;
+    switch (err)
+    {
+    case EINVAL:  *status = STATUS_INVALID_PARAMETER; break;   /* not aligned: "unaligned shared mapping" */
+    case ENOEXEC:
+    case ENODEV:  *status = STATUS_NOT_SUPPORTED; break;       /* no shared writable mmap here */
+    case EACCES:
+    case EPERM:   *status = STATUS_ACCESS_DENIED; break;
+    default:      *status = STATUS_NO_MEMORY; break;
+    }
+    return IOS_FMAP_FAIL;
+}
+
+/* Read [offset, offset + size) of fd into buf (see 2. above). Returns the bytes
+ * read -- fewer than size only at the end of the file, the rest left as it was
+ * -- or -1 with errno set when the file could not be read. */
+static ssize_t ios_fmap_read( int fd, void *buf, size_t size, off_t offset )
+{
+    size_t done = 0;
+
+    while (done < size)
+    {
+        size_t want = size - done;
+        ssize_t got;
+
+        if (want > IOS_FMAP_READ_CHUNK) want = IOS_FMAP_READ_CHUNK;
+        got = pread( fd, (char *)buf + done, want, offset + (off_t)done );
+        if (got < 0)
+        {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        if (!got) break;
+        done += (size_t)got;
+    }
+    return (ssize_t)done;
+}
+
+/* 1 when fd's file is on another volume than the prefix (config_dir): an
+ * external drive; 0 on the prefix's volume; -1 when either cannot be told. */
+static int ios_fmap_external( int fd )
+{
+    static int prefix_known;   /* 0: not looked up yet, 1: prefix_dev is set, -1: unknown */
+    static dev_t prefix_dev;
+    struct stat st, pst;
+
+    if (!prefix_known && config_dir)   /* not cached before the prefix is known */
+    {
+        if (!stat( config_dir, &pst )) { prefix_dev = pst.st_dev; prefix_known = 1; }
+        else prefix_known = -1;
+    }
+    if (prefix_known != 1 || fstat( fd, &st )) return -1;
+    return st.st_dev != prefix_dev;
+}
+
+/* See 3. above: whether a failed read copy fails the mapping. */
+static int ios_fmap_read_fails( int external )
+{
+    return external == 1;
+}
+
+enum ios_fmap_event { IOS_FMAP_MMAP_REFUSED, IOS_FMAP_READ_FAILED };
+
+/* One line for the first event of each kind and errno (16 at most). `what`
+ * names the mapping ("an image header", "an image section", "a file view"). */
+static void ios_fmap_note( enum ios_fmap_event event, int err, int fd, const char *what, size_t size )
+{
+    static struct { int event, err; } seen[16];
+    static unsigned int nseen;
+    const char *volume;
+    unsigned int i;
+    int external;
+
+    for (i = 0; i < nseen; i++) if (seen[i].event == (int)event && seen[i].err == err) return;
+    if (nseen >= sizeof(seen) / sizeof(seen[0])) return;
+    seen[nseen].event = event; seen[nseen].err = err; nseen++;
+    external = ios_fmap_external( fd );
+    volume = external == 1 ? "another volume (an external drive)"
+           : external == 0 ? "the prefix's volume" : "an unknown volume";
+    if (event == IOS_FMAP_MMAP_REFUSED)
+        dprintf( 2, "[file-map] mmap refused for %s of 0x%zx bytes (%s, errno %d) on %s: read into memory "
+                    "instead; logged once per errno\n", what, size, strerror( err ), err, volume );
+    else
+        dprintf( 2, "[file-map] read failed for %s of 0x%zx bytes (%s, errno %d) on %s: %s; logged once per errno\n",
+                 what, size, strerror( err ), err, volume,
+                 ios_fmap_read_fails( external ) ? "the mapping fails (the drive may have been unplugged)"
+                                                 : "kept as read, as before" );
+}
+/* file-map core end */
+
 /* ml561 (Sol's provenance recorder): remember HOW each file mapping was made.
  *
  * ml554 and ml559 both faulted at EXACTLY view_base+0x10000 — the 64KB Windows
@@ -19862,6 +19991,7 @@ static struct {
     long long offset, file_size;
     unsigned long long dev, ino;
     int shared, for_image, valid;
+    int external;   /* the file is on another volume than the prefix: an external drive (file-map core) */
 } ios_map_ring[IOS_MAP_RING];
 static volatile unsigned ios_map_ring_n;
 
@@ -19888,6 +20018,7 @@ static void ios_map_record( const void *view_base, size_t view_size, size_t star
         ios_map_ring[slot].ino = (unsigned long long)st.st_ino;
     }
     else ios_map_ring[slot].file_size = -1;
+    ios_map_ring[slot].external = fd >= 0 && ios_fmap_external( fd ) == 1;
     __sync_synchronize();
     ios_map_ring[slot].valid = 1;
 }
@@ -19920,13 +20051,14 @@ void ios_map_describe( const void *addr, char *out, size_t outlen )
         long long end_needed = ios_map_ring[best].offset + (long long)ios_map_ring[best].host_size;
         snprintf( out, outlen,
                   "view=%p+0x%zx start=0x%zx size=0x%zx map=0x%zx host=0x%zx off=0x%llx "
-                  "%s %s file_size=0x%llx dev=%llu ino=%llu need_off_end=0x%llx %s",
+                  "%s %s%s file_size=0x%llx dev=%llu ino=%llu need_off_end=0x%llx %s",
                   (void *)ios_map_ring[best].base, ios_map_ring[best].view_size,
                   ios_map_ring[best].start, ios_map_ring[best].size,
                   ios_map_ring[best].map_size, ios_map_ring[best].host_size,
                   ios_map_ring[best].offset,
                   ios_map_ring[best].shared ? "MAP_SHARED" : "MAP_PRIVATE",
                   ios_map_ring[best].for_image ? "image" : "section",
+                  ios_map_ring[best].external ? " ON THE EXTERNAL DRIVE (a fault here can mean it was unplugged)" : "",
                   ios_map_ring[best].file_size, ios_map_ring[best].dev, ios_map_ring[best].ino,
                   end_needed,
                   ios_map_ring[best].file_size >= 0 && end_needed > ios_map_ring[best].file_size
@@ -20056,31 +20188,32 @@ static NTSTATUS map_file_into_view_ex( struct file_view *view, int fd, size_t st
             return STATUS_SUCCESS;
         }
 
-        switch (errno)
+        /* Every refusal of a read-only or copy-on-write view reads instead; a shared
+         * writable view fails as upstream's did (file-map core). */
         {
-        case EINVAL:  /* file offset is not page-aligned, fall back to read() */
-            break;
-        case ENOEXEC:
-        case ENODEV:  /* filesystem doesn't support mmap(), fall back to read() */
-            if (vprot & VPROT_WRITE)
+            int err = errno;
+            NTSTATUS fail = STATUS_SUCCESS;
+
+            if (ios_fmap_after_mmap_error( err, (vprot & VPROT_WRITE) != 0, &fail ) == IOS_FMAP_READ)
+                ios_fmap_note( IOS_FMAP_MMAP_REFUSED, err, fd, for_image ? "an image section" : "a file view", map_size );
+            else if (fail == STATUS_NOT_SUPPORTED)
             {
                 ERR( "shared writable mmap not supported, broken filesystem?\n" );
-                return STATUS_NOT_SUPPORTED;
+                return fail;
             }
-            break;
-        case EACCES:
-        case EPERM:  /* access error, fall back to read() */
-            if (vprot & VPROT_WRITE)
+            else if (fail == STATUS_ACCESS_DENIED)
             {
                 dprintf(2, "[vmem-denied] shared-writable mmap EACCES/EPERM: addr=%p size=%p\n",
                         map_addr, (void *)map_size);
-                return STATUS_ACCESS_DENIED;
+                return fail;
             }
-            break;
-        default:
-            ERR( "mmap error %s, range %p-%p, unix_prot %#x\n",
-                 strerror(errno), map_addr, map_addr + map_size, prot );
-            return STATUS_NO_MEMORY;
+            else if (fail == STATUS_NO_MEMORY)
+            {
+                ERR( "mmap error %s, range %p-%p, unix_prot %#x\n",
+                     strerror(err), map_addr, map_addr + map_size, prot );
+                return fail;
+            }
+            /* EINVAL (not aligned): the unaligned shared mapping below */
         }
     }
 
@@ -20091,7 +20224,13 @@ static NTSTATUS map_file_into_view_ex( struct file_view *view, int fd, size_t st
     }
 
     mprotect( map_addr, map_size, PROT_READ | PROT_WRITE );
-    pread( fd, map_addr, size, offset );
+    if (ios_fmap_read( fd, map_addr, size, offset ) < 0)
+    {
+        int err = errno;
+
+        ios_fmap_note( IOS_FMAP_READ_FAILED, err, fd, for_image ? "an image section" : "a file view", size );
+        if (ios_fmap_read_fails( ios_fmap_external( fd ) )) return errno_to_status( err );
+    }
 #ifdef WINE_IOS
     if (for_image) ios_swap_image_note( view, map_addr, map_size );   /* madeira-bcd swap-images (off: a no-op) */
 #endif
@@ -21687,26 +21826,27 @@ static NTSTATUS map_pe_header( void *ptr, size_t size, size_t map_size, int fd, 
     {
         if (mmap( ptr, map_size, PROT_READ | PROT_WRITE, MAP_FIXED | MAP_PRIVATE, fd, 0 ) != MAP_FAILED)
         {
-            if (size > map_size) pread( fd, (char *)ptr + map_size, size - map_size, map_size );
+            if (size > map_size && ios_fmap_read( fd, (char *)ptr + map_size, size - map_size, map_size ) < 0)
+            {
+                int err = errno;
+
+                ios_fmap_note( IOS_FMAP_READ_FAILED, err, fd, "an image header", size - map_size );
+                if (ios_fmap_read_fails( ios_fmap_external( fd ) )) return errno_to_status( err );
+            }
             return STATUS_SUCCESS;
         }
-        switch (errno)
-        {
-        case EPERM:
-        case EACCES:
-            WARN( "noexec file system, falling back to read\n" );
-            break;
-        case ENOEXEC:
-        case ENODEV:
-            WARN( "file system doesn't support mmap, falling back to read\n" );
-            break;
-        default:
-            ERR( "mmap error %s, range %p-%p\n", strerror(errno), ptr, (char *)ptr + size );
-            return STATUS_NO_MEMORY;
-        }
+        /* A private view: every refusal reads instead (file-map core), and the
+         * sections then read too, as upstream does after a refused header. */
+        ios_fmap_note( IOS_FMAP_MMAP_REFUSED, errno, fd, "an image header", map_size );
         *removable = TRUE;
     }
-    pread( fd, ptr, size, 0 );
+    if (ios_fmap_read( fd, ptr, size, 0 ) < 0)
+    {
+        int err = errno;
+
+        ios_fmap_note( IOS_FMAP_READ_FAILED, err, fd, "an image header", size );
+        if (ios_fmap_read_fails( ios_fmap_external( fd ) )) return errno_to_status( err );
+    }
     return STATUS_SUCCESS;  /* page protections will be updated later */
 }
 

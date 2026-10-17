@@ -445,7 +445,10 @@ mfiv = body_of(virt, 'static NTSTATUS map_file_into_view_ex( struct file_view *v
                      '                                       off_t offset, unsigned int vprot, BOOL removable,\n'
                      '                                       BOOL for_image )\n{')
 tail = mfiv[mfiv.rindex('mprotect( map_addr, map_size, PROT_READ | PROT_WRITE );'):]
-check('pread( fd, map_addr, size, offset );\n#ifdef WINE_IOS\n    if (for_image) ios_swap_image_note( view, map_addr, map_size );' in tail,
+# The read copy is check-external-drive.py's ios_fmap_read; a copy that failed on an
+# external drive returns before the note.
+check('if (ios_fmap_read( fd, map_addr, size, offset ) < 0)' in tail and
+      '    }\n#ifdef WINE_IOS\n    if (for_image) ios_swap_image_note( view, map_addr, map_size );' in tail,
       'the note follows the read() fallback, images only')
 check(mfiv.count('ios_swap_image_note') == 1, 'no other note in map_file_into_view_ex (mmapped sections are file pages already)')
 check('if (!ios_swap_image_armed ||' in note_fn and 'mmap' not in note_fn and 'pwrite' not in note_fn,

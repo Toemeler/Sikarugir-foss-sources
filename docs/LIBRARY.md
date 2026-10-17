@@ -18,7 +18,10 @@ Copy a game's whole folder into **Madeira › wine › drive_c** with the Files 
 tap **+** and choose its `.exe`, or a `.bat`/`.cmd` batch file (ml1163). Only x86
 and x64 PE executables and batch files inside drive_c can be added; the library
 stores the path relative to drive_c, so a changed app container path does not
-break entries. Adding an entry installs nothing. A batch file gets a **Batch**
+break entries. A game on a USB-C drive is added the same way from **External
+drive (D:)** at the top of that list, once Settings › External drive has a
+folder (docs/EXTERNAL_DRIVE.md); its entry keeps its path relative to that
+folder and the letter. Adding an entry installs nothing. A batch file gets a **Batch**
 badge and, like every entry, starts directly by default (see **Launch** below).
 
 The library reads the executable's PE imports (and those of the DLLs next to

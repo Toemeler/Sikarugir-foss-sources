@@ -6,7 +6,7 @@ name: Config catalog
 on:
   workflow_dispatch:
   push:
-    branches: [codex/elden-ring-native-oodle-20261017]
+    branches: [codex/elden-ring-native-oodle-20261017, codex/external-ssd-games-20261017]
     paths: [.github/workflows/config-catalog.yml, build/tools/gen-config-catalog.py]
 permissions:
   contents: read

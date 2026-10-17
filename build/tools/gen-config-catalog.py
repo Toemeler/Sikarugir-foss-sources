@@ -431,6 +431,12 @@ OVERLAY = {
                 "choices": [("", "Off"), ("1024", "1 GB"), ("2048", "2 GB"), ("3072", "3 GB"), ("4096", "4 GB")]},
     "env.MADEIRA_SWAP_COVERAGE": {"category": "Memory & JIT pool", "note": "Which allocations the swap tier backs with its file (only when the tier is on). Large allocations (classic, the default): single 8 MB+ commits in the guest band. All allocations of 1 MB+ (blocks). 1 MB+ and overflow (wide): blocks plus allocations outside the band and fresh reservations. Whole reservations 4 MB+ (broad, ml1257): every new reservation of at least swap-min-mb (4 MB) below FEX's band backed whole when made, holes punched on decommit, swap-mb caps the disk it uses (a soft cap, checked when a block is backed). Unset: broad if swap-mode = 2, else classic.", "title": "Swap tier coverage", "kind": "choice",
                 "choices": [("", "Large allocations (8 MB+)"), ("blocks", "All allocations of 1 MB+"), ("wide", "1 MB+ and overflow"), ("broad", "Whole reservations 4 MB+ (broad)")]},
+    "external-drive-letter": {"category": "App & front end", "title": "External drive letter", "kind": "choice",
+                "note": "The drive letter Windows programs see the folder from Settings › External drive as (D: by default; "
+                        "D: to Y:). Games added from the drive keep the letter they were added with and do not start "
+                        "under another one. Read when a session starts.",
+                "choices": [("", "D: (default)"), ("e", "E:"), ("f", "F:"), ("g", "G:")],
+                "sources": ["app/Madeira/ExternalDrive.swift"]},
     "swap-mode": {"category": "Memory & JIT pool", "title": "Swap tier mode (2 = broad)",
                 "note": "2 selects broad swap coverage (ml1257) when env.MADEIRA_SWAP_COVERAGE is unset; any other value, classic. The coverage key wins when set."},
     "swap-min-mb": {"category": "Memory & JIT pool", "title": "Swap tier floor (MB)",

@@ -2572,7 +2572,9 @@ struct ContentView: View {
 
     /// The rest of Play, with JIT on: checks the entry's launch profile and starts it.
     private func startLibraryEntry(_ entry: LibraryEntry) {
-        do { if entry.desktop != true { _ = try LibraryModel.executable(entry.launchRelativePath) }; try entry.validate() }
+        // A game on the external drive: its folder is resolved and accessed here, and a
+        // drive that is not connected stops the start with a message (ExternalDrive.swift).
+        do { if entry.desktop != true { _ = try LibraryModel.executable(entry.launchRelativePath, drive: entry.drive) }; try entry.validate() }
         catch {
             library.error = error.localizedDescription
             logStore.log("[launch-preflight] profile validation failed: \(error.localizedDescription)", level: .error)
@@ -3614,6 +3616,10 @@ struct ContentView: View {
         let winePrefixPath = documentsPath.appendingPathComponent("wine").path
 
         logStore.log("Wine prefix: \(winePrefixPath)")
+
+        // The external drive's letter (dosdevices/d:), before the wineserver and every
+        // Wine process: linked to the chosen folder while it is connected, removed otherwise.
+        ExternalDrive.shared.link(prefix: winePrefixPath, program: getenv("MADEIRA_EXE").map { String(cString: $0) })
 
         let result = wineserver_start(winePrefixPath)
         if result == 0 {

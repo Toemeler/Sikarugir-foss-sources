@@ -1,4 +1,5 @@
 #pragma once
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -29,6 +30,13 @@ void wine_exit_status_reset(void);
 // stage. Called by the "Continue Net Test" UI button after the user has
 // detached the JIT debugger and switched VPNs. Returns 0 on success.
 int madeira_write_continue_flag(void);
+
+// The external drive (ExternalDrive.swift): one line for the log about the
+// folder linked as a drive letter -- its volume's file system, mount flags and
+// free space, and for `file` (the program the session starts, when it is on the
+// drive; may be NULL) a timed read and whether the kernel maps it privately and
+// shared. Written to out (always NUL-terminated).
+void madeira_external_probe(const char *root, const char *file, char *out, size_t outlen);
 
 // Extract the bundled prefix template if the prefix is new (idempotent).
 // Madeira Dock's component setup calls it before writing Steam's registry keys.

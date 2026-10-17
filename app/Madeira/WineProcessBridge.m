@@ -536,19 +536,18 @@ static uint16_t madeira_pe_machine(const char *unix_path)
  *    any further. Otherwise it is looked up in the bundle's i386-windows. To
  *    launch the 32-bit build of a name both sets carry (explorer.exe, cmd.exe),
  *    give its full path, C:\windows\syswow64\<name>.
- *  - any other form (another drive, a relative Win32 path) is not probed. */
+ *  - "D:\...\app.exe" (another letter): the file through the prefix's
+ *    dosdevices link for it, the external drive's folder (ExternalDrive.swift).
+ *  - any other form (a relative Win32 path) is not probed. */
+static int madeira_dos_to_unix(const char *dos, const char *prefix, char *out, size_t outlen);
 static uint16_t madeira_target_machine(const char *exe, const char *prefix, NSString *bundle)
 {
     static const char * const farms64[] = { "aarch64-windows", "arm64ec-windows" };
     char probe[PATH_MAX];
-    size_t skip;
 
-    if ((exe[0] == 'C' || exe[0] == 'c') && exe[1] == ':' && exe[2] == '\\')
+    if (((exe[0] >= 'A' && exe[0] <= 'Z') || (exe[0] >= 'a' && exe[0] <= 'z')) && exe[1] == ':' && exe[2] == '\\')
     {
-        skip = strlen(prefix) + strlen("/drive_c/");
-        if (snprintf(probe, sizeof(probe), "%s/drive_c/%s", prefix, exe + 3) >= (int)sizeof(probe))
-            return 0;
-        for (char *p = probe + skip; *p; p++) if (*p == '\\') *p = '/';
+        if (madeira_dos_to_unix(exe, prefix, probe, sizeof(probe))) return 0;
     }
     else if (strchr(exe, '\\') || (exe[0] && exe[1] == ':'))
         return 0;
@@ -564,6 +563,163 @@ static uint16_t madeira_target_machine(const char *exe, const char *prefix, NSSt
             return 0;
     }
     return madeira_pe_machine(probe);
+}
+
+/* "X:\a\b" on the unix side: C: is <prefix>/drive_c/a/b, exactly as the launch
+ * always mapped it; another letter is <prefix>/dosdevices/x:/a/b, through the
+ * link the app made for it (ExternalDrive.swift links the external folder as
+ * D:), the same link Wine itself resolves the letter through. 0 on success; -1
+ * for another form or a path that does not fit. */
+static int madeira_dos_to_unix(const char *dos, const char *prefix, char *out, size_t outlen)
+{
+    char letter;
+    int n;
+
+    if (!dos || !((dos[0] >= 'A' && dos[0] <= 'Z') || (dos[0] >= 'a' && dos[0] <= 'z')) ||
+        dos[1] != ':' || dos[2] != '\\')
+        return -1;
+    letter = (char)(dos[0] | 0x20);
+    if (letter == 'c') n = snprintf(out, outlen, "%s/drive_c/%s", prefix, dos + 3);
+    else n = snprintf(out, outlen, "%s/dosdevices/%c:/%s", prefix, letter, dos + 3);
+    if (n < 0 || (size_t)n >= outlen) return -1;
+    for (char *p = out + strlen(prefix); *p; p++) if (*p == '\\') *p = '/';
+    return 0;
+}
+
+/* Set once Wine's main thread has started in this app run: from then on the
+ * process's fault handling is Wine's (its task-level exception handler), and the
+ * external probe below does not touch a mapped page any more. */
+static volatile int madeira_wine_ran;
+
+/* external-probe begin (tests/host/check-external-drive.py compiles from here to the end mark)
+ *
+ * What the external folder's volume does with the two ways Wine reads a game's
+ * files: read(2), which NtReadFile uses for every archive read, and mmap(2),
+ * which a file view or an aligned image section uses (build/ntdll-unix/
+ * virtual_ios.c map_file_into_view_ex). A volume that refuses mmap makes those
+ * views fall back to a read copy there (its "file-map core", logged once); one
+ * that maps but cannot page in would fault in the game instead, so the probe
+ * reads its mapped page under a temporary SIGBUS/SIGSEGV handler and reports
+ * "fault" rather than crashing. Only this thread's fault is caught: a fault of
+ * another thread in that window goes to the handler installed before. */
+#include <signal.h>
+#include <sys/mman.h>
+#include <sys/mount.h>
+#include <time.h>
+
+static sigjmp_buf madeira_probe_jmp;
+static pthread_t madeira_probe_thread;
+static volatile sig_atomic_t madeira_probe_armed;
+static struct sigaction madeira_probe_old_bus, madeira_probe_old_segv;
+
+static void madeira_probe_fault(int sig, siginfo_t *info, void *context)
+{
+    (void)info; (void)context;
+    if (madeira_probe_armed && pthread_equal(pthread_self(), madeira_probe_thread))
+    {
+        madeira_probe_armed = 0;
+        siglongjmp(madeira_probe_jmp, sig);
+    }
+    /* Not the probe's fault: the previous handler takes it when it repeats. */
+    sigaction(sig, sig == SIGBUS ? &madeira_probe_old_bus : &madeira_probe_old_segv, NULL);
+}
+
+/* The first `len` bytes of fd mapped with `flags`: "ok" when they match
+ * `expect` (what read(2) returned), "differs", "fault(SIGBUS)" or "refused(<errno>)". */
+static void madeira_probe_map(int fd, size_t len, int flags, int touch, const unsigned char *expect,
+                              char *out, size_t outlen)
+{
+    struct sigaction sa;
+    const unsigned char *page;
+    int sig;
+
+    page = mmap(NULL, len, PROT_READ, flags, fd, 0);
+    if (page == MAP_FAILED) { snprintf(out, outlen, "refused(%s)", strerror(errno)); return; }
+    if (!touch) { munmap((void *)page, len); snprintf(out, outlen, "mapped"); return; }
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_sigaction = madeira_probe_fault;
+    sa.sa_flags = SA_SIGINFO;
+    sigemptyset(&sa.sa_mask);
+    madeira_probe_thread = pthread_self();
+    sigaction(SIGBUS, &sa, &madeira_probe_old_bus);
+    sigaction(SIGSEGV, &sa, &madeira_probe_old_segv);
+    if (!(sig = sigsetjmp(madeira_probe_jmp, 1)))
+    {
+        int same;
+        madeira_probe_armed = 1;
+        same = !memcmp(page, expect, len);
+        madeira_probe_armed = 0;
+        snprintf(out, outlen, "%s", same ? "ok" : "differs");
+    }
+    else snprintf(out, outlen, "fault(%s)", sig == SIGBUS ? "SIGBUS" : "SIGSEGV");
+    sigaction(SIGBUS, &madeira_probe_old_bus, NULL);
+    sigaction(SIGSEGV, &madeira_probe_old_segv, NULL);
+    munmap((void *)page, len);
+}
+
+/* `touch`: read the mapped pages (0 reports only whether mmap accepts the file). */
+static void madeira_external_probe_ex(const char *root, const char *file, int touch, char *out, size_t outlen)
+{
+    struct statfs fs;
+    size_t used = 0;
+    int fd;
+
+#define PROBE_ADD(...) do { if (used < outlen) { int n_ = snprintf(out + used, outlen - used, __VA_ARGS__); \
+                                                 if (n_ > 0) used += (size_t)n_; } } while (0)
+    if (!outlen) return;
+    out[0] = 0;
+    if (statfs(root, &fs) == 0)
+    {
+        PROBE_ADD("fs=%s from=%s %s%s free=%.1fGB", fs.f_fstypename, fs.f_mntfromname,
+                  (fs.f_flags & MNT_RDONLY) ? "ro" : "rw", (fs.f_flags & MNT_LOCAL) ? ",local" : "",
+                  (double)fs.f_bavail * (double)fs.f_bsize / 1e9);
+    }
+    else PROBE_ADD("statfs failed (%s)", strerror(errno));
+    if (!file) return;
+    if ((fd = open(file, O_RDONLY | O_CLOEXEC)) < 0) { PROBE_ADD(" program: open failed (%s)", strerror(errno)); return; }
+    {
+        struct stat st;
+        struct timespec t0, t1;
+        size_t want, got = 0, page = (size_t)getpagesize();
+        unsigned char *buf;
+        char how[64];
+
+        if (fstat(fd, &st) || st.st_size <= 0) { PROBE_ADD(" program: empty"); close(fd); return; }
+        want = (size_t)st.st_size < (8u << 20) ? (size_t)st.st_size : (8u << 20);
+        if (!(buf = malloc(want))) { close(fd); return; }
+        clock_gettime(CLOCK_MONOTONIC, &t0);
+        while (got < want)
+        {
+            ssize_t r = pread(fd, buf + got, want - got > (1u << 20) ? (1u << 20) : want - got, (off_t)got);
+            if (r < 0 && errno == EINTR) continue;
+            if (r <= 0) break;
+            got += (size_t)r;
+        }
+        clock_gettime(CLOCK_MONOTONIC, &t1);
+        {
+            double ms = (double)(t1.tv_sec - t0.tv_sec) * 1e3 + (double)(t1.tv_nsec - t0.tv_nsec) / 1e6;
+            PROBE_ADD(" program=%lldMB read=%.1fMB in %.0fms", (long long)(st.st_size >> 20), (double)got / 1048576.0, ms);
+            if (got < want) PROBE_ADD(" (short: %s)", strerror(errno));
+            else if (ms > 0) PROBE_ADD(" (%.0f MB/s)", (double)got / 1048576.0 / (ms / 1e3));
+        }
+        if (got >= (page < want ? page : want))
+        {
+            size_t len = page < want ? page : want;
+            madeira_probe_map(fd, len, MAP_PRIVATE, touch, buf, how, sizeof(how));
+            PROBE_ADD(" mmap-private=%s", how);
+            madeira_probe_map(fd, len, MAP_SHARED, touch, buf, how, sizeof(how));
+            PROBE_ADD(" mmap-shared=%s", how);
+        }
+        free(buf);
+        close(fd);
+    }
+#undef PROBE_ADD
+}
+/* external-probe end */
+
+void madeira_external_probe(const char *root, const char *file, char *out, size_t outlen)
+{
+    madeira_external_probe_ex(root, file, !madeira_wine_ran, out, outlen);
 }
 
 /* The bundle carries the i386 Wine set. */
@@ -1735,7 +1891,9 @@ static void *wine_process_thread(void *arg) {
          * services batch) is what starts). */
         const char *launch_workdir = getenv("MADEIRA_WORKDIR");   /* set by the library for one launch: the working folder (Steam's, or the entry's); not a setting */
         char workdir[512] = "";
-        if (launch_workdir && (launch_workdir[0] == 'C' || launch_workdir[0] == 'c') && launch_workdir[1] == ':' &&
+        /* C:\ or another letter's folder (the external drive's D:\, through dosdevices). */
+        if (launch_workdir && ((launch_workdir[0] >= 'A' && launch_workdir[0] <= 'Z') ||
+                               (launch_workdir[0] >= 'a' && launch_workdir[0] <= 'z')) && launch_workdir[1] == ':' &&
             launch_workdir[2] == '\\' && launch_workdir[3] && !strstr(launch_workdir, "..") &&
             strlen(launch_workdir) < sizeof(workdir) - 2)
             snprintf(workdir, sizeof(workdir), "%s", launch_workdir);
@@ -1743,10 +1901,8 @@ static void *wine_process_thread(void *arg) {
         /* ml1163: a typed folder may end in '\\'; MADEIRA_INITIAL_CWD gets exactly one. */
         for (size_t n = strlen(workdir); n > 3 && workdir[n - 1] == '\\'; n--) workdir[n - 1] = 0;
         if (workdir[0]) {
-            char unix_dir[1024], windir[512], wine_cwd[520];
-            snprintf(windir, sizeof(windir), "%s", workdir + 3);
-            for (char *p = windir; *p; p++) if (*p == '\\') *p = '/';
-            snprintf(unix_dir, sizeof(unix_dir), "%s/drive_c/%s", g_prefix_path, windir);
+            char unix_dir[1024], wine_cwd[520];
+            if (madeira_dos_to_unix(workdir, g_prefix_path, unix_dir, sizeof(unix_dir))) unix_dir[0] = 0;
             int rc = chdir(unix_dir);
             setenv("PWD", unix_dir, 1);
             snprintf(wine_cwd, sizeof(wine_cwd), "%s\\", workdir);
@@ -1757,6 +1913,13 @@ static void *wine_process_thread(void *arg) {
             /* Convert "C:\Program Files\Thumper\X.exe" → unix path */
             char unix_dir[1024];
             const char *drive_c = "drive_c";
+            /* Another letter (the external drive's D:): its dosdevices link (madeira_dos_to_unix). */
+            char drive_link[16];
+            if (madeira_exe[1] == ':' && (madeira_exe[0] | 0x20) != 'c' &&
+                (madeira_exe[0] | 0x20) >= 'a' && (madeira_exe[0] | 0x20) <= 'z') {
+                snprintf(drive_link, sizeof(drive_link), "dosdevices/%c:", madeira_exe[0] | 0x20);
+                drive_c = drive_link;
+            }
             const char *after_drive = madeira_exe + 3; /* skip "C:\" */
             char *last_sep = strrchr(madeira_exe, '\\');
             if (last_sep && last_sep > madeira_exe + 3) {
@@ -1794,6 +1957,7 @@ static void *wine_process_thread(void *arg) {
         // Record this thread so wine_ios_exit knows where to longjmp
         wine_ios_main_thread = pthread_self();
         wine_ios_exit_initialized = 1;
+        madeira_wine_ran = 1;   /* the external probe stops touching mapped pages */
 
         LOG("Calling __wine_main...");
 

@@ -138,7 +138,7 @@ require('if let appID = entry.steamAppID, !entry.startsSteamGameDirectly {' in l
 # Program picker starts like any library game, without Dock, a sign-in transfer or a client.
 direct = launch[launch.index('if let appID = entry.steamAppID, !entry.startsSteamGameDirectly {'):]
 require(direct.index('startDock(') < direct.index('guard entry.steamProgram?.isEmpty == false else {') <
-        direct.index('LibraryModel.executable(entry.launchRelativePath)') < direct.index('entry.configureLaunch()') <
+        direct.index('LibraryModel.executable(entry.launchRelativePath, drive: entry.drive)') < direct.index('entry.configureLaunch()') <
         direct.index('runWineFullSequence(profile: entry)'),
         '"The game": no program chosen, no start; otherwise the program is checked inside drive_c and started as a library game')
 require('writeHandoff' not in direct[direct.index('guard entry.steamProgram'):] and 'credentialsForDock' not in launch,

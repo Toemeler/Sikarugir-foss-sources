@@ -168,8 +168,14 @@ enum FrontendChoice {
 struct LibraryEntry: Codable, Identifiable {
     var id = UUID()
     var title: String
-    /// The executable, relative to drive_c ("Games/Foo/foo.exe").
+    /// The executable, relative to drive_c ("Games/Foo/foo.exe"), or to the
+    /// external folder for an entry on another drive (`drive`).
     var relativePath: String
+    /// A game on the external drive (ExternalDrive.swift): the drive letter ("d")
+    /// Windows sees the folder chosen in Settings › External drive as, and
+    /// `relativePath` is relative to that folder. nil: drive C:, as before.
+    /// Optional, so older files decode.
+    var drive: String?
     /// 32 or 64 from the PE header, 0 when unknown.
     var bits: Int
     /// A user-chosen cover in Documents/madeira-art/.
@@ -358,9 +364,16 @@ struct LibraryEntry: Codable, Identifiable {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("wine/drive_c", isDirectory: true)
     }
-    /// C:\a\b -> <prefix>/drive_c/a/b; nil for another drive or a ".." element.
+    /// The external drive's paths (ExternalDrive.swift; LibraryModel sets it):
+    /// D:\a\b -> <its folder>/a/b, nil for another letter or while no folder answers.
+    static var externalHostPath: (String) -> String? = { _ in nil }
+    /// C:\a\b -> <prefix>/drive_c/a/b, D:\a\b -> the external folder's a/b
+    /// (externalHostPath); nil for another drive or a ".." element.
     static func hostURL(ofWindowsPath path: String) -> URL? {
         let p = path.trimmingCharacters(in: .whitespaces)
+        if p.count >= 3, p.prefix(3).uppercased() != "C:\\", let host = externalHostPath(p) {
+            return URL(fileURLWithPath: host)
+        }
         guard p.count >= 3, p.prefix(3).uppercased() == "C:\\" else { return nil }
         let parts = p.dropFirst(3).split(separator: "\\").map(String.init)
         guard !parts.contains("..") else { return nil }
@@ -443,7 +456,9 @@ struct LibraryEntry: Codable, Identifiable {
         guard startsSteamGameDirectly, let program = steamProgram, !program.isEmpty else { return relativePath }
         return relativePath + "/" + program
     }
-    var launchWindowsPath: String { "C:\\" + launchRelativePath.replacingOccurrences(of: "/", with: "\\") }
+    var launchWindowsPath: String { driveRoot + launchRelativePath.replacingOccurrences(of: "/", with: "\\") }
+    /// "C:\", or the external drive's root ("D:\") for an entry on it.
+    var driveRoot: String { (drive ?? "c").uppercased() + ":\\" }
     /// "The game"'s working folder as a Windows path, or nil for the program's own folder.
     var steamWorkingWindowsPath: String? {
         guard startsSteamGameDirectly, let folder = steamProgramFolder else { return nil }
@@ -457,7 +472,7 @@ struct LibraryEntry: Codable, Identifiable {
         return entry
     }
 
-    var windowsPath: String { "C:\\" + relativePath.replacingOccurrences(of: "/", with: "\\") }
+    var windowsPath: String { driveRoot + relativePath.replacingOccurrences(of: "/", with: "\\") }
 
     /// The vsync mode to apply: a saved 30 or 40 FPS limit runs as 60 when it is
     /// not offered (DXMT without that cap would present uncapped).
@@ -470,6 +485,10 @@ struct LibraryEntry: Codable, Identifiable {
               !launchArguments.contains("\0"), !launchWindowsPath.contains("\0"),
               launchWindowsPath.utf8.count < 1024, (steamWorkingWindowsPath?.utf8.count ?? 0) < 512 else {
             throw LibraryError.message("The saved launch profile contains invalid display or argument values.")
+        }
+        // The external drive's letters (ExternalDriveRules.letters); a Steam game is always on C:.
+        if let drive, drive.count != 1 || !"defghijklmnopqrstuvwxy".contains(drive) || steamAppID != nil {
+            throw LibraryError.message("The saved launch profile names an invalid drive.")
         }
         var quoted = false, inToken = false, tokens = 0
         for character in launchArguments {
@@ -489,14 +508,14 @@ struct LibraryEntry: Codable, Identifiable {
             throw LibraryError.message("The saved launch profile contains an invalid launch mode.")
         }
         if usesLaunchOptions, let chosen = workingDirectory?.trimmingCharacters(in: .whitespaces), !chosen.isEmpty {
-            // WineProcessBridge maps MADEIRA_WORKDIR onto drive_c (C:\ only), and the
-            // services batch quotes it, so only an existing C:\ folder without
-            // quotes is accepted.
+            // WineProcessBridge maps MADEIRA_WORKDIR onto drive_c (C:\), or through the
+            // prefix's dosdevices link for the external drive (D:\), and the services
+            // batch quotes it, so only an existing folder there without quotes is accepted.
             var isFolder: ObjCBool = false
             guard !chosen.contains("\""), !chosen.contains("\0"), chosen.utf8.count < 500,
                   let url = Self.hostURL(ofWindowsPath: chosen),
                   FileManager.default.fileExists(atPath: url.path, isDirectory: &isFolder), isFolder.boolValue else {
-                throw LibraryError.message("The working folder must be an existing folder on drive C:, such as C:\\Games\\Some Game.")
+                throw LibraryError.message("The working folder must be an existing folder on drive C: or the external drive, such as C:\\Games\\Some Game.")
             }
         }
         // validate() is the last step of a launch that can refuse it
@@ -653,6 +672,9 @@ final class LibraryModel: ObservableObject {
     @Published var overlayFields = ["FPS", "Frame time", "RAM", "Battery"]
     private var launchPresent: UInt64 = 0
     private var launchSurface: UInt64 = 0
+    /// poll()'s count, and the message once the session's external drive stopped answering.
+    private var pollTicks = 0
+    private var driveLost: String?
     private var launchStarted = Date()
     /// Read by the starting screen for its elapsed-time line.
     var launchStartedAt: Date { launchStarted }
@@ -691,6 +713,7 @@ final class LibraryModel: ObservableObject {
 
     private init() {
         refreshFlag()
+        LibraryEntry.externalHostPath = { ExternalDrive.shared.hostPath(ofWindowsPath: $0) }
         if FileManager.default.fileExists(atPath: file.path) {
             do {
                 let doc = try JSONDecoder().decode(Document.self, from: Data(contentsOf: file))
@@ -817,10 +840,11 @@ final class LibraryModel: ObservableObject {
         let revision = 12
         guard !metadataInFlight.contains(id), let entry = entries.first(where: { $0.id == id }), entry.desktop != true,
               entry.metadataRevision != revision || Date().timeIntervalSince(entry.metadataChecked ?? .distantPast) > 86400,
-              let url = try? Self.executable(entry.relativePath) else { return }
+              let url = try? Self.executable(entry.relativePath, drive: entry.drive),
+              let root: URL = entry.drive == nil ? Self.drive : (try? ExternalDrive.shared.root().get()) else { return }
         metadataInFlight.insert(id)
         defer { metadataInFlight.remove(id) }
-        let result = await LibraryMetadataScanner.shared.scan(url, drive: Self.drive)
+        let result = await LibraryMetadataScanner.shared.scan(url, drive: root)
         guard !Task.isCancelled, var updated = entries.first(where: { $0.id == id }) else { return }
         updated.folderBytes = result.bytes
         if let api = result.api { updated.graphicsAPI = api }
@@ -879,25 +903,51 @@ final class LibraryModel: ObservableObject {
 
     /// What an entry can start: an executable, or (ml1163) a batch file run through cmd.exe.
     static let programExtensions: Set<String> = ["exe", "bat", "cmd"]
-    static func executable(_ relative: String) throws -> URL {
-        let url = drive.appendingPathComponent(relative).resolvingSymlinksInPath().standardizedFileURL
-        guard url.path.hasPrefix(drive.path + "/"), programExtensions.contains(url.pathExtension.lowercased()),
+    /// `letter`: the entry's drive (LibraryEntry.drive); nil is drive_c. A game on
+    /// the external drive resolves its folder here (ExternalDrive.prepare), so a
+    /// drive that is not connected stops the launch with a message.
+    static func executable(_ relative: String, drive letter: String? = nil) throws -> URL {
+        var root = drive
+        if let letter {
+            let external = ExternalDrive.shared
+            guard letter == external.letter else {
+                throw LibraryError.message("This game is on drive \(letter.uppercased()):, but the external folder is drive \(external.letter.uppercased()): now (madeira.cfg external-drive-letter).")
+            }
+            switch external.root() {
+            case .success(let folder): root = folder
+            case .failure(let failure): throw LibraryError.message(ExternalDriveRules.message(failure, letter: letter))
+            }
+        }
+        let url = root.appendingPathComponent(relative).resolvingSymlinksInPath().standardizedFileURL
+        guard url.path.hasPrefix(root.path + "/"), programExtensions.contains(url.pathExtension.lowercased()),
               FileManager.default.fileExists(atPath: url.path) else {
+            if let letter {
+                throw LibraryError.message("\(ExternalDriveRules.windowsPath(letter: letter, relative: relative)) is not in the external folder. Check the folder chosen in Settings › External drive.")
+            }
             throw LibraryError.message("Choose an executable (.exe, .bat or .cmd) inside drive_c.")
         }
         return url
     }
     static func inspect(_ url: URL) throws -> LibraryEntry {
-        guard url.resolvingSymlinksInPath().path.hasPrefix(drive.path + "/") else {
-            throw LibraryError.message("The executable must be inside drive_c.")
+        // drive_c, or the external folder (its entries keep the drive letter).
+        var root = drive
+        var letter: String?
+        if !url.resolvingSymlinksInPath().path.hasPrefix(drive.path + "/") {
+            guard let external = try? ExternalDrive.shared.root().get(),
+                  url.resolvingSymlinksInPath().path.hasPrefix(external.path + "/") else {
+                throw LibraryError.message("The executable must be inside drive_c or the external drive's folder.")
+            }
+            root = external; letter = ExternalDrive.shared.letter
         }
         if ["bat", "cmd"].contains(url.pathExtension.lowercased()) {
             // ml1163: a batch file has no PE header. Like every entry it starts
             // directly by default, as upstream starts every game; the details page
             // warns that Wine then stops when cmd.exe, its first process, exits.
-            let relative = String(url.resolvingSymlinksInPath().path.dropFirst(drive.path.count + 1))
-            return LibraryEntry(title: url.deletingPathExtension().lastPathComponent.replacingOccurrences(of: "_", with: " "),
-                                relativePath: relative, bits: 0)
+            let relative = String(url.resolvingSymlinksInPath().path.dropFirst(root.path.count + 1))
+            var entry = LibraryEntry(title: url.deletingPathExtension().lastPathComponent.replacingOccurrences(of: "_", with: " "),
+                                     relativePath: relative, bits: 0)
+            entry.drive = letter
+            return entry
         }
         let h = try FileHandle(forReadingFrom: url); defer { try? h.close() }
         let dos = try h.read(upToCount: 64) ?? Data()
@@ -909,9 +959,10 @@ final class LibraryModel: ObservableObject {
         guard pe.count == 6, Array(pe.prefix(4)) == [0x50, 0x45, 0, 0] else { throw LibraryError.message("Missing PE header.") }
         let machine = Int(pe[4]) | Int(pe[5]) << 8
         guard machine == 0x14c || machine == 0x8664 else { throw LibraryError.message("Only x86 and x64 executables are supported.") }
-        let relative = String(url.resolvingSymlinksInPath().path.dropFirst(drive.path.count + 1))
+        let relative = String(url.resolvingSymlinksInPath().path.dropFirst(root.path.count + 1))
         let name = url.deletingPathExtension().lastPathComponent.replacingOccurrences(of: "_", with: " ")
         var entry = LibraryEntry(title: name, relativePath: relative, bits: machine == 0x14c ? 32 : 64)
+        entry.drive = letter
         entry.graphicsAPI = graphicsImports(url)
         return entry
     }
@@ -1079,6 +1130,13 @@ final class LibraryModel: ObservableObject {
                 showGameView(reason: "surface")
             } else if Date().timeIntervalSince(launchStarted) > 30 { launchSlow = true }
         }
+        // A game on the external drive: whether its folder still answers, every 2 s. Once
+        // it stopped (the drive was unplugged), the session says so until it ends, and the
+        // end reports it; the prefix and saves are on the iPad and are not touched.
+        pollTicks += 1
+        if activeEntry?.drive != nil, pollTicks % 4 == 0, let lost = ExternalDrive.shared.sessionCheck() {
+            driveLost = lost; sessionMessage = lost
+        }
         if wine_process_is_running() != 0 {
             sawProcess = true
             if sessionMessage == "Starting…" { sessionMessage = "" }
@@ -1181,6 +1239,8 @@ final class LibraryModel: ObservableObject {
     }
     private func finish() {
         if sawProcess, let report = exitReport() { error = report }
+        if let lost = driveLost { error = error.map { lost + "\n\n" + $0 } ?? lost }
+        driveLost = nil
         timer?.invalidate(); timer = nil
         saveCurrentProfile()
         controllerMode = nil
@@ -2617,6 +2677,7 @@ struct LibraryView: View {
             if SteamSettingsSection.shown, settingsShow("Steam", "Dock", "sign in", "account", "setup") {
                 SteamSettingsSection(open: { settingsSheet = $0 })
             }
+            if settingsShow("external drive", "USB", "SSD", "drive", "exFAT", "APFS", "folder") { ExternalDriveSettings() }
             if settingsShow(".NET", "Mono", "Wine Mono", "framework", "download") { WineMonoSettingsSection() }
             if settingsShow("saves", "backup", "restore", "save games") { SavesSection() }
             if settingsShow("appearance", "liquid metal", "metal", "glass") {
@@ -2856,30 +2917,52 @@ struct LibraryView: View {
 
 struct ExecutableBrowser: View {
     let folder: URL
+    /// What the browser lists inside: drive_c, or the external drive's folder
+    /// (ExternalDrive.swift), whose programs become entries on its drive letter.
+    var root: URL = LibraryModel.drive
     var select: (LibraryEntry) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var files: [URL] = []
     @State private var error: String?
+    /// drive_c's top level: the external folder, or why it cannot be listed.
+    @State private var external: URL?
+    @State private var externalNote: String?
+    private var atTop: Bool { folder == LibraryModel.drive && root == LibraryModel.drive }
     var body: some View {
         List {
             if let error { Text(error).foregroundStyle(.red) }
+            if atTop, let external {
+                NavigationLink { ExecutableBrowser(folder: external, root: external, select: select) } label: {
+                    Label("External drive (\(ExternalDrive.shared.letter.uppercased()):) · \(external.lastPathComponent)", systemImage: "externaldrive")
+                }
+            } else if atTop, let externalNote {
+                Label(externalNote, systemImage: "externaldrive.badge.exclamationmark").font(.footnote).foregroundStyle(.secondary)
+            }
             ForEach(files, id: \.path) { file in
                 if file.hasDirectoryPath {
-                    NavigationLink { ExecutableBrowser(folder: file, select: select) } label: { Label(file.lastPathComponent, systemImage: "folder") }
+                    NavigationLink { ExecutableBrowser(folder: file, root: root, select: select) } label: { Label(file.lastPathComponent, systemImage: "folder") }
                 } else {
                     Button { do { select(try LibraryModel.inspect(file)) } catch { self.error = error.localizedDescription } } label: {
                         Label(file.lastPathComponent, systemImage: file.pathExtension.lowercased() == "exe" ? "app.dashed" : "terminal")
                     }
                 }
             }
-            if files.isEmpty && error == nil { Text("No executables here. Copy files into Madeira/wine/drive_c using Files.").foregroundStyle(.secondary) }
+            if files.isEmpty && error == nil {
+                Text(root == LibraryModel.drive ? "No executables here. Copy files into Madeira/wine/drive_c using Files." : "No executables here.").foregroundStyle(.secondary)
+            }
         }.navigationTitle(folder.lastPathComponent)
         .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } } }
         .task {
+            if atTop, ExternalDrive.shared.record != nil {
+                switch ExternalDrive.shared.root() {
+                case .success(let url): external = url
+                case .failure(let failure): externalNote = ExternalDriveRules.message(failure, letter: ExternalDrive.shared.letter)
+                }
+            }
             do {
                 // ml1163: .bat and .cmd files are listed too (they run through cmd.exe).
                 files = try FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.isDirectoryKey], options: .skipsHiddenFiles)
-                    .filter { ($0.hasDirectoryPath || LibraryModel.programExtensions.contains($0.pathExtension.lowercased())) && $0.resolvingSymlinksInPath().path.hasPrefix(LibraryModel.drive.path + "/") }
+                    .filter { ($0.hasDirectoryPath || LibraryModel.programExtensions.contains($0.pathExtension.lowercased())) && $0.resolvingSymlinksInPath().path.hasPrefix(root.path + "/") }
                     .sorted { if $0.hasDirectoryPath != $1.hasDirectoryPath { return $0.hasDirectoryPath }; return $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
             } catch { self.error = error.localizedDescription }
         }
@@ -3282,7 +3365,7 @@ struct LibraryDetail: View {
                 Button("Remove", role: .destructive) { leaving = true; model.remove(entry.id); dismiss() }
             }
             .task {
-                if entry.graphicsAPI == nil, entry.desktop != true, let url = try? LibraryModel.executable(entry.relativePath) { entry.graphicsAPI = LibraryModel.graphicsImports(url) }
+                if entry.graphicsAPI == nil, entry.desktop != true, let url = try? LibraryModel.executable(entry.relativePath, drive: entry.drive) { entry.graphicsAPI = LibraryModel.graphicsImports(url) }
             }
             .onAppear {
                 migrateEntryOptions()
@@ -3678,6 +3761,62 @@ struct DisplayRateSettings: View {
         } header: { Text("Display") } footer: {
             Text("Off by default. On a 120 Hz display, keeps the panel at 120 Hz during a game's 60 FPS limit so a frame that misses one refresh waits 8 ms instead of 17 ms. Uses more power.")
         }
+    }
+}
+
+/// Settings › External drive: the folder on a USB-C drive (APFS or exFAT) that
+/// Windows programs see as D: (ExternalDrive.swift, docs/EXTERNAL_DRIVE.md).
+/// Choosing it stores a bookmark; every session resolves it and links the letter.
+struct ExternalDriveSettings: View {
+    @State private var status: ExternalDrive.Status?
+    @State private var importing = false
+    @State private var confirmForget = false
+    @State private var error: String?
+    private var letter: String { ExternalDrive.shared.letter.uppercased() + ":" }
+
+    var body: some View {
+        Section {
+            if let status {
+                LabeledContent("Drive \(letter)", value: status.name)
+                if let failure = status.failure {
+                    Text(ExternalDriveRules.message(failure, letter: ExternalDrive.shared.letter))
+                        .font(.footnote).foregroundStyle(.orange)
+                } else {
+                    LabeledContent("Connected", value: details(status))
+                }
+            }
+            Button(status == nil ? "Choose Folder…" : "Choose Another Folder…") { importing = true }
+            if status != nil {
+                Button("Forget Folder", role: .destructive) { confirmForget = true }
+            }
+            if let error { Text(error).font(.footnote).foregroundStyle(.red) }
+        } header: { Text("External drive") } footer: {
+            Text("Play games from a USB-C drive formatted APFS or exFAT. Copy a game's folder to the drive with the Files app, choose a folder on the drive here, then add the game with + in the library: it starts from drive \(letter). Saves, settings and Wine stay on this iPad. Keep the drive connected while a game runs.")
+        }
+        .fileImporter(isPresented: $importing, allowedContentTypes: [.folder]) { result in
+            do {
+                try ExternalDrive.shared.choose(try result.get())
+                error = nil
+            } catch {
+                self.error = "Madeira could not keep access to that folder: " + error.localizedDescription
+            }
+            refresh()
+        }
+        .confirmationDialog("Forget the external folder?", isPresented: $confirmForget, titleVisibility: .visible) {
+            Button("Forget Folder", role: .destructive) { ExternalDrive.shared.forget(); refresh() }
+        } message: {
+            Text("Games on drive \(letter) stay in the library and on the drive, but cannot start until a folder is chosen again.")
+        }
+        .onAppear { refresh() }
+    }
+
+    private func refresh() { status = ExternalDrive.shared.status() }
+    private func details(_ status: ExternalDrive.Status) -> String {
+        var parts: [String] = []
+        if let fs = status.fileSystem { parts.append(fs) }
+        if let free = status.freeBytes { parts.append(ByteCountFormatter.string(fromByteCount: free, countStyle: .file) + " free") }
+        if status.readOnly { parts.append("read-only") }
+        return parts.isEmpty ? "Yes" : parts.joined(separator: " · ")
     }
 }
 

@@ -38,6 +38,10 @@ env.FEX_EXTENDEDVOLATILEMETADATA = oo2core_5_win64.dll:bink2w64.dll
 # sessions without a game's Resolution use it too.
 # desktop-size = 1280x720
 
+# External drive (docs/EXTERNAL_DRIVE.md): the letter Windows programs see the folder from
+# Settings > External drive as (D: to Y:; D: unset). Games added from the drive keep their letter.
+# external-drive-letter = d
+
 # ml1230: audio kept queued ahead of the speaker, in ms (10-500). A client that writes one
 # period per wake-up (Wine's spatial audio, Wwise) no longer loses sound when the wake-up is
 # late; more absorbs longer stalls at the cost of latency. [ios_audio] ml1230 lines report it.
