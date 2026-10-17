@@ -449,11 +449,11 @@ static void test_anon_resv( void )
     CHECK( ios_swap_whole_resv( &v, rw ) == 1 && ios_swap_n == 1, "anon-resv: the 1st 8 MB reservation is backed whole" );
     v.base = b;
     CHECK( ios_swap_whole_resv( &v, rw ) == 0 && ios_swap_n == 1 && ios_swap_anon_nrange == 1, "anon-resv: the 2nd stays ordinary memory" );
-    CHECK( ios_swap_why( b + 0x100000, 2u << 20, rw, &v ) == IOS_SW_ANON, "anon-resv: a commit inside it is not backed" );
+    CHECK( ios_swap_why( b + 0x100000, 4u << 20, rw, &v ) == IOS_SW_ANON, "anon-resv: a commit inside it is not backed" );
     CHECK( ios_swap_skip_bytes[IOS_SWK_ANON] == (8u << 20), "anon-resv: census counts the skipped reservation" );
     v.base = c;
     CHECK( ios_swap_whole_resv( &v, rw ) == 1 && ios_swap_n == 2, "anon-resv: the 3rd is backed again" );
-    CHECK( ios_swap_why( c + 0x100000, 2u << 20, rw, &v ) == IOS_SW_BACKED, "anon-resv: other ranges keep the normal rule" );
+    CHECK( ios_swap_why( c + 0x100000, 4u << 20, rw, &v ) == IOS_SW_BACKED, "anon-resv: other ranges keep the normal rule" );
     ios_swap_release_range( a, 8u << 20, 0 );
     ios_swap_release_range( c, 8u << 20, 0 );
     CHECK( ios_swap_n == 0 && ios_swap_bump == 0, "anon-resv: releases return all file space" );
