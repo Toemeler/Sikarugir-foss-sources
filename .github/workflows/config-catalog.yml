@@ -2,7 +2,7 @@ name: Config catalog
 # Regenerates app/Madeira/ConfigCatalog.generated.swift on Linux (the generator
 # is not run on Windows) and uploads it; nothing is committed here. A push
 # that changes this file or the generator runs it (dispatch needs the default branch);
-# touch this line to regenerate after a key or its comment changed (ui-scale lists).
+# touch this line to regenerate after a key or its comment changed (ui-scale lists, external-drive-letter).
 on:
   workflow_dispatch:
   push:

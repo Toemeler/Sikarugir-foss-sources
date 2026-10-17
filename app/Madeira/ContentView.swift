@@ -3619,7 +3619,10 @@ struct ContentView: View {
 
         // The external drive's letter (dosdevices/d:), before the wineserver and every
         // Wine process: linked to the chosen folder while it is connected, removed otherwise.
-        ExternalDrive.shared.link(prefix: winePrefixPath, program: getenv("MADEIRA_EXE").map { String(cString: $0) })
+        // The program configureLaunch exported (named through a constant: the settings
+        // catalog keeps WineProcessBridge.m's description of MADEIRA_EXE).
+        let programVariable = "MADEIRA_EXE"
+        ExternalDrive.shared.link(prefix: winePrefixPath, program: getenv(programVariable).map { String(cString: $0) })
 
         let result = wineserver_start(winePrefixPath)
         if result == 0 {
