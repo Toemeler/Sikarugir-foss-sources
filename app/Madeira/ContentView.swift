@@ -3396,6 +3396,11 @@ struct ContentView: View {
         }
         do {
             try MadeiraDock.validate(game, drive: MadeiraDock.drive)
+            // A game added from the external drive and started with Steam running: its
+            // folder is resolved and accessed here, as for a direct start (ExternalDrive.swift).
+            if let profile, profile.drive != nil {
+                _ = try LibraryModel.executable(profile.launchRelativePath, drive: profile.drive)
+            }
             try profile?.validate()
             guard SteamSignIn.isSignedIn else { throw DockError.message("Sign in to Steam in Madeira before starting Dock.") }
         } catch { fail(error); return }

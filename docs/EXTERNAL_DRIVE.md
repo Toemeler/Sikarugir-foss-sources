@@ -50,7 +50,10 @@ applied on first sight as for any new entry.
   library checks the folder every 2 s.
 - `LibraryEntry.drive` holds the letter of an entry on the drive; its
   `relativePath` is relative to the folder. `LibraryModel.executable` and
-  `inspect` resolve it; the + browser lists the folder.
+  `inspect` resolve it; the + browser lists the folder. Both a direct start
+  and a start with Steam running (Madeira Dock, which Elden Ring's
+  recommended settings choose for a copy added by hand; Dock accepts a program
+  on any local drive) check the drive before anything starts.
 - `WineProcessBridge.m`: the program's folder, a working folder and the
   32/64-bit probe map `X:\…` through `dosdevices/x:` for letters other than C:
   (`madeira_dos_to_unix`; C: is mapped exactly as before).

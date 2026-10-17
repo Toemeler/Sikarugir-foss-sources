@@ -553,6 +553,11 @@ check('ExternalDriveSettings()' in library and 'struct ExternalDriveSettings: Vi
 start = body_of(content, '    private func startLibraryEntry(_ entry: LibraryEntry) {')
 check(start.index('LibraryModel.executable(entry.launchRelativePath, drive: entry.drive)') < start.index('try entry.validate()') <
       start.index('runWineFullSequence(profile: entry)'), "the launch's preflight resolves the drive first")
+dock = content[content.index('    private func startDock(_ game: DockGame, compactPool: Bool, profile: LibraryEntry? = nil) {'):]
+dock = dock[:dock.index('Task { @MainActor in')]
+check(dock.index('if let profile, profile.drive != nil {') < dock.index('try profile?.validate()') and
+      '_ = try LibraryModel.executable(profile.launchRelativePath, drive: profile.drive)' in dock,
+      'a D: game started with Steam running (Madeira Dock, as Elden Ring\'s recommendations choose) is checked the same way')
 server = body_of(content, '    private func startWineserver() {')
 check(server.index('ExternalDrive.shared.link(prefix: winePrefixPath, program:') < server.index('wineserver_start(winePrefixPath)'),
       'the letter is linked before the wineserver and every Wine process')
