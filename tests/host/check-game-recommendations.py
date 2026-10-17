@@ -707,7 +707,7 @@ check(LogStore.shared.lines.contains { $0.hasPrefix("[recommended] Red Dead Rede
 UserDefaults.standard.removeObject(forKey: key)
 var ring = LibraryEntry(title: "ELDEN RING", windowsPath: steam + #"\ELDEN RING"#, steamAppID: 1245620)
 check(R.prepare(&ring, new: true) && ring.recommendedProgram == "PLAY MADEIRA.exe" && ring.fpsMode == 3
-      && ring.resolution == "960x540" && ring.metalFXUpscale == 2 && ring.controllerMode == "keys",
+      && ring.resolution == "800x600" && ring.metalFXUpscale == 2 && ring.controllerMode == "keys",
       "a new Elden Ring entry takes PLAY MADEIRA.exe with the list's fields")
 ring.controllerMode = "dinput"
 check(!R.prepare(&ring) && ring.controllerMode == "dinput", "an existing player's controller choice is preserved")
