@@ -19,21 +19,21 @@
       "screenshots": [],
       "versions": [
         {
-          "version": "0.1.3.48",
-          "buildVersion": "48",
-          "date": "2026-10-17T08:26:36Z",
-          "localizedDescription": "Automatic build build-48.",
-          "downloadURL": "https://github.com/Toemeler/Sikarugir-foss-sources/releases/download/build-48/Madeira.ipa",
-          "size": 103036268,
-          "sha256": "6648e1aa4984d87c5e4f287f128f9d112543c19454637226408350570c3be529",
+          "version": "0.1.3.49",
+          "buildVersion": "49",
+          "date": "2026-10-17T08:58:45Z",
+          "localizedDescription": "Automatic build build-49.",
+          "downloadURL": "https://github.com/Toemeler/Sikarugir-foss-sources/releases/download/build-49/Madeira.ipa",
+          "size": 103038932,
+          "sha256": "d586ebf74c79fe654c0e6470b9f864ccf6bcd5c5f3e14db72e0f87d0b3b0027f",
           "minOSVersion": "26.0"
         }
       ],
-      "version": "0.1.3.48",
-      "versionDate": "2026-10-17T08:26:36Z",
-      "versionDescription": "Automatic build build-48.",
-      "downloadURL": "https://github.com/Toemeler/Sikarugir-foss-sources/releases/download/build-48/Madeira.ipa",
-      "size": 103036268
+      "version": "0.1.3.49",
+      "versionDate": "2026-10-17T08:58:45Z",
+      "versionDescription": "Automatic build build-49.",
+      "downloadURL": "https://github.com/Toemeler/Sikarugir-foss-sources/releases/download/build-49/Madeira.ipa",
+      "size": 103038932
     },
     {
       "name": "StikDebug",
