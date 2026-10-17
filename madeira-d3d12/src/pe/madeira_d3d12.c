@@ -3707,12 +3707,15 @@ static int mad_rp_carry_on(void) {
  * already leaves the render pass open (barrier-render = 0, fence modes 1 and 5);
  * this gives the list boundary the same rule, but stricter: a barrier naming
  * one of the pass's own attachments, a UAV or aliasing barrier, or one with
- * more than 8 resources still ends it. */
+ * more than 8 resources still ends it. rp-carry-barriers = 2 lets any barrier
+ * pass, exactly the rule within one list. */
 static int g_rp_carry_bar = -1;
 static int mad_rp_carry_bar_on(void) {
     if (g_rp_carry_bar < 0) {
-        g_rp_carry_bar = mad_cfg_int_pe("rp-carry-barriers", 0) ? 1 : 0;   /* experiment (with rp-carry = 1): a barrier on textures the pass does not draw to does not keep two lists' passes apart */
-        if (g_rp_carry_bar) d3d12_log("[madeira-d3d12] rp-carry-barriers = 1: a barrier on textures a pass does not draw to does not keep rp-carry from joining two lists\n");
+        g_rp_carry_bar = (int)mad_cfg_int_pe("rp-carry-barriers", 0);   /* experiment (with rp-carry = 1): 1 = a barrier on textures the pass does not draw to, 2 = any barrier, does not keep two lists' passes apart */
+        if (g_rp_carry_bar < 0 || g_rp_carry_bar > 2) g_rp_carry_bar = 0;
+        if (g_rp_carry_bar) d3d12_log("[madeira-d3d12] rp-carry-barriers = %d: %s does not keep rp-carry from joining two lists\n", g_rp_carry_bar,
+                                      g_rp_carry_bar == 2 ? "any barrier (as within one list)" : "a barrier on textures a pass does not draw to");
     }
     return g_rp_carry_bar;
 }
@@ -3721,7 +3724,9 @@ static int mad_rp_plain(const struct mad_cmd *c, struct mad_resource *const *rt,
     UINT i, j;
     switch (c->kind) {
     case MC_BARRIER:   /* madeira-bcd rp-carry-barriers */
-        if (c->u.barrier.all || !mad_rp_carry_bar_on()) return 0;
+        if (!mad_rp_carry_bar_on()) return 0;
+        if (g_rp_carry_bar == 2) return 1;   /* within one list no barrier ends a render pass (barrier-render = 0) */
+        if (c->u.barrier.all) return 0;
         for (i = 0; i < c->u.barrier.n && i < 8; i++) {
             if (depth && c->u.barrier.res[i] == depth) return 0;
             for (j = 0; j < nrt; j++) if (c->u.barrier.res[i] == rt[j]) return 0;
