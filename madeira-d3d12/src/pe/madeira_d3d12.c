@@ -3711,7 +3711,7 @@ static int mad_rp_carry_on(void) {
 static int g_rp_carry_bar = -1;
 static int mad_rp_carry_bar_on(void) {
     if (g_rp_carry_bar < 0) {
-        g_rp_carry_bar = mad_cfg_int_pe("rp-carry-barriers", 0) ? 1 : 0;
+        g_rp_carry_bar = mad_cfg_int_pe("rp-carry-barriers", 0) ? 1 : 0;   /* experiment (with rp-carry = 1): a barrier on textures the pass does not draw to does not keep two lists' passes apart */
         if (g_rp_carry_bar) d3d12_log("[madeira-d3d12] rp-carry-barriers = 1: a barrier on textures a pass does not draw to does not keep rp-carry from joining two lists\n");
     }
     return g_rp_carry_bar;
@@ -13649,7 +13649,7 @@ static float mad_ui_k(void) {
     if (g_ui_k < 0.0f) {
         char v[32] = "";
         float k = 0.0f;
-        if (mad_cfg_str_pe("ui-scale", v, sizeof v) && v[0]) k = (float)atof(v);
+        if (mad_cfg_str_pe("ui-scale", v, sizeof v) && v[0]) k = (float)atof(v);   /* native-resolution HUD, menus and text: the swapchain and the UI canvas K times the game's size (1 < K <= 4; Elden Ring 800x600 on a 2752x2064 iPad: 3.44) */
         if (k > 4.0f) k = 4.0f;
         g_ui_k = k > 1.01f ? k : 0.0f;
         if (g_ui_k) d3d12_log("[ui-scale] the swapchain and the UI canvas render at %.2fx (madeira.cfg ui-scale)\n", g_ui_k);
