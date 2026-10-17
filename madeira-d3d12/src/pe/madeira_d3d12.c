@@ -2040,6 +2040,7 @@ struct mad_exec {
     struct mad_resource *enc_rt[8]; UINT enc_nrt; struct mad_resource *enc_depth; /* what the open encoder has */
     UINT enc_w, enc_h;              /* ml934b: and the area it was created with */
     float enc_k;                    /* madeira-bcd ui-scale: the open pass's targets are this much larger than the game thinks */
+    int enc_mixed;                  /* madeira-bcd ui-scale: the open pass mixes scaled and unscaled targets (drawn unscaled) */
     struct { struct mad_resource *res; float rgba[4]; float depth; UINT8 stencil; UINT8 flags; int is_depth; struct mad_rtvp v; } pend[16];
     unsigned npend;
     struct mad_pso *pso;
@@ -4434,6 +4435,7 @@ static int exec_begin_render(struct mad_exec *e) {
             if (uk < 0.0f) uk = a->ui_k; else if (a->ui_k != uk) mixed = 1;
         }
         e->enc_k = (uk > 0.0f && !mixed) ? uk : 0.0f;
+        e->enc_mixed = mixed;
         if (mixed) {
             static volatile LONG said;
             w = mw; h = mh;
@@ -8376,6 +8378,22 @@ tess_go:
             c_sc.scissor_rect.x = (UINT64)x0; c_sc.scissor_rect.y = (UINT64)y0;
             c_sc.scissor_rect.width = (UINT64)(x1 - x0); c_sc.scissor_rect.height = (UINT64)(y1 - y0);
             if (!dd || mad_dd_sc(dd, &c_sc.scissor_rect)) MAD_APPEND(&c_sc);
+        }
+    }
+    if (e->enc_k > 0.0f || e->enc_mixed) {   /* madeira-bcd ui-scale: name each pipeline that draws into a scaled (or mixed) pass, once */
+        static struct mad_pso *seen[64];
+        static volatile LONG nseen;
+        LONG j = 0, n = nseen < 64 ? nseen : 64;
+        while (j < n && seen[j] != e->pso) j++;
+        if (j == n && n < 64) {
+            LONG slot = InterlockedIncrement(&nseen) - 1;
+            if (slot < 64) {
+                seen[slot] = e->pso;
+                d3d12_log("[ui-scale] %s pass %ux%u: %s|%s viewport %.0f,%.0f %.0fx%.0f scissor %ld,%ld-%ld,%ld (game units), %u color target(s)%s\n",
+                          e->enc_mixed ? "mixed" : "scaled", e->enc_w, e->enc_h, e->pso->vs_name, e->pso->ps_name[0] ? e->pso->ps_name : "-",
+                          e->has_vp ? e->vp.TopLeftX : 0.0f, e->has_vp ? e->vp.TopLeftY : 0.0f, e->has_vp ? e->vp.Width : 0.0f, e->has_vp ? e->vp.Height : 0.0f,
+                          (long)e->sc.left, (long)e->sc.top, (long)e->sc.right, (long)e->sc.bottom, e->enc_nrt, e->enc_depth ? " + depth" : "");
+            }
         }
     }
     memset(sb, 0, sizeof sb);
