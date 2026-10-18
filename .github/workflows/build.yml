@@ -201,11 +201,12 @@ jobs:
           DOCK="dock-$V-$(k "$(t madeira-dock)" "$(t build/madeira-dock)" "$MINGW")"
           FEXEC="fexec-$V-$(k "$(t FEX)" "$(t build/fex-arm64ec)" "$MINGW")"
           VCRT="vcruntime-$V-$(k "$(git hash-object .github/scripts/fetch_vcruntime.sh)")"
+          MONO="winemono-$V-$(k "$(t build/wine-mono)")"
           {
             echo "gnutls=$GNUTLS"; echo "ffmpeg=$FFMPEG"; echo "freetype=$FREETYPE"
             echo "fex=$FEX"; echo "wine=$WINE"; echo "dxmt=$DXMT"
             echo "wow64=$WOW64"
-            echo "pairing=$PAIRING"; echo "dock=$DOCK"; echo "vcrt=$VCRT"
+            echo "pairing=$PAIRING"; echo "dock=$DOCK"; echo "vcrt=$VCRT"; echo "mono=$MONO"
             echo "fexec=$FEXEC"
             echo "llvm=$LLVM_KEY"
           } | tee -a "$GITHUB_OUTPUT"
@@ -321,6 +322,14 @@ jobs:
           path: |
             app/Madeira/x86_64-vcruntime
             app/Madeira/i386-vcruntime
+
+      - name: "Cache: Wine Mono"
+        if: steps.appcheck.outputs.skip != 'true'
+        id: c-mono
+        uses: actions/cache/restore@v4
+        with:
+          key: ${{ steps.keys.outputs.mono }}
+          path: build/wine-mono/wine-mono-*
 
       - name: "Cache: Xcode compilation cache"
         if: steps.appcheck.outputs.skip != 'true'
@@ -654,6 +663,19 @@ jobs:
             app/Madeira/x86_64-vcruntime
             app/Madeira/i386-vcruntime
 
+      # .NET Framework programs run out of the box: the Xcode phase "Bundle
+      # Wine Mono" copies build/wine-mono/wine-mono-<ver> into the app, and
+      # WineProcessBridge.m links it as C:\windows\mono\mono-2.0 every session.
+      - name: Wine Mono
+        if: steps.appcheck.outputs.skip != 'true' && steps.c-mono.outputs.cache-hit != 'true'
+        run: build/wine-mono/fetch.sh
+      - name: "Save: Wine Mono"
+        if: steps.appcheck.outputs.skip != 'true' && steps.c-mono.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          key: ${{ steps.keys.outputs.mono }}
+          path: build/wine-mono/wine-mono-*
+
       # ------------------------------------------------------------------ app
       - name: Build
         if: steps.appcheck.outputs.skip != 'true'
@@ -731,13 +753,16 @@ jobs:
           vc32 = {f for f in folder("i386-vcruntime") if f.endswith(".dll")}
           if len(vc64) < 14 or len(vc32) < 13:
               raise SystemExit(f"IPA has {len(vc64)} x64 and {len(vc32)} x86 Visual C++ runtime DLLs (want 14 and 13)")
+          mono = folder("wine-mono")
+          if "bin/libmono-2.0-x86.dll" not in mono or "lib/mono/4.5/mscorlib.dll" not in mono:
+              raise SystemExit("IPA is missing Wine Mono (wine-mono/bin/libmono-2.0-x86.dll, lib/mono/4.5/mscorlib.dll)")
           if "hello-x86.exe" not in bundled:
               raise SystemExit("IPA is missing the 32-bit smoke test hello-x86.exe")
           with zipfile.ZipFile(ipa) as z:
               d3d8 = z.read(prefix + "d3d8.dll")
           if b"Wine builtin DLL" in d3d8[:0x80]:
               raise SystemExit("i386 d3d8.dll is Wine's wined3d frontend, not d3d8to9")
-          print(f"Verified {len(dlls)} i386 DLLs, {len(vc64)}+{len(vc32)} VC++ runtime DLLs and d3d8to9 in {ipa}")
+          print(f"Verified {len(dlls)} i386 DLLs, {len(vc64)}+{len(vc32)} VC++ runtime DLLs, Wine Mono and d3d8to9 in {ipa}")
           PY
 
       - name: Determine release tag

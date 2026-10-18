@@ -34,7 +34,7 @@ dependency license texts are in `LICENSES/`. See "Why GPL-3.0-or-later" below.
 | **libxml2** 2.12.10 and **libxslt** 1.1.45 | MIT (Daniel Veillard and contributors) | Unmodified, statically linked into Wine's `msxml3.dll` (`arm64ec-windows`) | Wine's bundled copies (`wine/libs/xml2`, `wine/libs/xslt`), built with the module by `build/wine-pe/build-modules.sh`. Licence texts in `LICENSES/MIT-libxml2.txt` and `LICENSES/MIT-libxslt.txt`. |
 | **NVAPI SDK headers** | MIT (NVIDIA Corporation & affiliates) | Unmodified headers, compiled into DXMT's `nvapi64.dll` (`arm64ec-windows`) | `dxmt/external/nvapi`. DXMT's own NVAPI implementation answers only with Madeira's opt-in "Report an NVIDIA GPU" switch; no NVIDIA binary is shipped. Licence text in `LICENSES/MIT-NVAPI.txt`. |
 | **d3d8to9** (commit `255338f6`) | BSD-2-Clause, Copyright (C) 2015 Patrick Mours | Unmodified, built for i386 by `build/d3d8to9/build.sh` and shipped as `i386-windows/d3d8.dll` (libc++/libunwind linked statically) | Direct3D 8 on top of the farm's D3D9 (DXMT): Wine's own d3d8 needs wined3d, which has no backend in this port. Source: `https://github.com/crosire/d3d8to9`. Licence text in `LICENSES/BSD-2-d3d8to9.txt`, bundled as `licenses/d3d8to9-BSD-2-Clause.txt`. |
-| **Wine Mono** 11.0.0 | Mono: LGPL or MIT X11 per part; FNA: Ms-PL and MIT; FAudio, FNA3D, MojoShader, SDL3: zlib; winforms, wpf, monoDX, System.Speech and Wine Mono's own code: MIT (`build/wine-mono/COPYING`) | Prebuilt runtime, unmodified except `lib/mono/4.5/mscorlib.dll` (4 IL bytes in `GC.Collect`, `build/wine-mono/bundle.sh`), bundled as `wine-mono/` with that COPYING only in a development build made after `build/wine-mono/fetch.sh`; **release builds do not include it** (the packaging step removes `wine-mono/`). Instead the app downloads it from WineHQ when the user asks (setup or Settings › .NET Framework, `app/Madeira/WineMono.swift`), checks it against the same SHA-256, unpacks it without `lib/mono/*-api` and applies the same mscorlib patch on the device | Runs .NET Framework programs; Wine's mscoree loads it. The x86 tarball from `dl.winehq.org`, SHA-256 pinned in `build/wine-mono/pin.sh`. The compile-time reference assemblies (`lib/mono/*-api`, which include the GPL-licensed ICSharpCode.SharpZipLib) are not bundled. Exact corresponding source: `wine-mono-11.0.0-src.tar.xz` from the same folder; see "Corresponding source" below. |
+| **Wine Mono** 11.0.0 | Mono: LGPL or MIT X11 per part; FNA: Ms-PL and MIT; FAudio, FNA3D, MojoShader, SDL3: zlib; winforms, wpf, monoDX, System.Speech and Wine Mono's own code: MIT (`build/wine-mono/COPYING`) | Prebuilt runtime, unmodified except `lib/mono/4.5/mscorlib.dll` (4 IL bytes in `GC.Collect`, `build/wine-mono/bundle.sh`), bundled as `wine-mono/` with that COPYING: CI runs `build/wine-mono/fetch.sh` (SHA-256 checked) and the Xcode phase copies it into the app, without `lib/mono/*-api`. A build without it still downloads it from WineHQ when the user asks (setup or Settings › .NET Framework, `app/Madeira/WineMono.swift`) | Runs .NET Framework programs; Wine's mscoree loads it. The x86 tarball from `dl.winehq.org`, SHA-256 pinned in `build/wine-mono/pin.sh`. The compile-time reference assemblies (`lib/mono/*-api`, which include the GPL-licensed ICSharpCode.SharpZipLib) are not bundled. Exact corresponding source: `wine-mono-11.0.0-src.tar.xz` from the same folder; see "Corresponding source" below. |
 
 ## Why GPL-3.0-or-later
 
@@ -173,12 +173,9 @@ large for the repository, so it is pinned rather than tracked:
 - `build/wine-mono/fetch.sh --source` -- downloads both from
   `https://dl.winehq.org/wine/wine-mono/11.0.0/` and verifies them
 
-Release builds do not ship Wine Mono (decided 2026-10-06): the packaging step
-removes `wine-mono/` from the app, and Madeira fetches it from WineHQ on first
-use instead (`app/Madeira/WineMono.swift`), so the copy on a device comes from
-WineHQ, not from Madeira. A release that did ship it would have to attach that source
-tarball next to the package and add the licence texts COPYING lists to
-`LICENSES/`.
+This fork's CI builds ship Wine Mono in the app (`wine-mono/`), with its
+`COPYING`. The corresponding source is `wine-mono-11.0.0-src.tar.xz` from
+WineHQ, pinned and verified as above (`build/wine-mono/fetch.sh --source`).
 
 ## Relinking and static linking
 

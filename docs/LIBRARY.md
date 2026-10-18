@@ -333,8 +333,9 @@ switches. Setup never opens over a running session.
 
 **Wine Mono** (`app/Madeira/WineMono.swift`). Games built on .NET Framework
 start through Wine's mscoree, which needs Wine Mono at `C:\windows\mono\mono-2.0`.
-Release builds do not carry it; setup's Wine Mono page and **Settings › .NET
-Framework** download it from WineHQ (`wine-mono-<ver>-x86.tar.xz`, about 42 MB,
+This fork's CI builds carry it in the app (`wine-mono/`), so setup does not
+ask for it. A build without it falls back to setup's Wine Mono page and
+**Settings › .NET Framework**, which download it from WineHQ (`wine-mono-<ver>-x86.tar.xz`, about 42 MB,
 pinned by SHA-256 in `build/wine-mono/pin.sh`), unpack it on the device with
 Apple's LZMA decoder and a small tar reader, without the compile-time
 `lib/mono/*-api` assemblies (about 135 MB installed), apply bundle.sh's ml1281
