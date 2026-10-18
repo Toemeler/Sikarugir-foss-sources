@@ -3794,9 +3794,12 @@ struct ExternalDriveSettings: View {
             Text("Play games from a USB-C drive formatted APFS or exFAT. Copy a game's folder to the drive with the Files app, choose a folder on the drive here, then add the game with + in the library: it starts from drive \(letter). Saves, settings and Wine stay on this iPad. Keep the drive connected while a game runs.")
         }
         // Not .fileImporter: inside LiveContainer its folder picker cannot choose a folder
-        // (FolderPicker.m; Open did nothing on the iPad with build 56).
-        .sheet(isPresented: $importing) {
-            ExternalFolderPicker { picked in
+        // (FolderPicker.m; Open did nothing on the iPad with build 56). Nor a SwiftUI sheet:
+        // build 57 built the picker three times in 15 ms when the row's sheet opened and the
+        // one on screen closed at once (it worked on the second try), so UIKit presents it.
+        .onChange(of: importing) { _, open in
+            guard open else { return }
+            ExternalFolderPicker.shared.present { picked in
                 importing = false
                 guard let picked else { return }
                 do {
@@ -3807,7 +3810,6 @@ struct ExternalDriveSettings: View {
                 }
                 refresh()
             }
-            .ignoresSafeArea()
         }
         .confirmationDialog("Forget the external folder?", isPresented: $confirmForget, titleVisibility: .visible) {
             Button("Forget Folder", role: .destructive) { ExternalDrive.shared.forget(); refresh() }
@@ -3828,24 +3830,33 @@ struct ExternalDriveSettings: View {
 }
 
 /// Settings › External drive's folder picker: UIKit's own document picker for one
-/// folder, opened in place (FolderPicker.m). `done` gets the folder, or nil when
-/// the picker was cancelled.
-struct ExternalFolderPicker: UIViewControllerRepresentable {
-    var done: (URL?) -> Void
+/// folder, opened in place (FolderPicker.m), presented modally by UIKit from the top
+/// view controller, once per Choose. `done` gets the folder, or nil when cancelled.
+final class ExternalFolderPicker: NSObject, UIDocumentPickerDelegate {
+    static let shared = ExternalFolderPicker()
+    private var done: ((URL?) -> Void)?
+    private weak var picker: UIDocumentPickerViewController?
 
-    func makeCoordinator() -> Coordinator { Coordinator(done: done) }
-    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
-        let picker = madeira_folder_picker(context.coordinator)
+    func present(_ done: @escaping (URL?) -> Void) {
+        // One picker at a time; a picker gone without a callback no longer blocks the next.
+        if self.done != nil, picker?.presentingViewController != nil { done(nil); return }
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        var top = scenes.flatMap(\.windows).first(where: \.isKeyWindow)?.rootViewController
+        while let next = top?.presentedViewController, !next.isBeingDismissed { top = next }
+        guard let top else { done(nil); return }
+        self.done = done
+        let picker = madeira_folder_picker(self)
+        self.picker = picker
         LogStore.shared.log("[external-drive] folder picker (UIKit's own initializer: \(madeira_folder_picker_bypassed() != 0 ? "yes, LiveContainer's hook bypassed" : "no hook found"))")
-        return picker
+        top.present(picker, animated: true)
     }
-    func updateUIViewController(_ controller: UIDocumentPickerViewController, context: Context) {}
 
-    final class Coordinator: NSObject, UIDocumentPickerDelegate {
-        let done: (URL?) -> Void
-        init(done: @escaping (URL?) -> Void) { self.done = done }
-        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) { done(urls.first) }
-        func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) { done(nil) }
+    func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) { finish(urls.first) }
+    func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) { finish(nil) }
+    private func finish(_ url: URL?) {
+        let done = self.done
+        self.done = nil
+        done?(url)
     }
 }
 

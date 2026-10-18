@@ -548,9 +548,16 @@ finish = body_of(model, '    private func finish() {')
 check('if let lost = driveLost { error = error.map { lost + "\\n\\n" + $0 } ?? lost }' in finish and 'driveLost = nil' in finish,
       "the session's end says the drive was disconnected")
 settings_view = body_of(library, 'struct ExternalDriveSettings: View {')
-check('ExternalDriveSettings()' in library and '.sheet(isPresented: $importing) {' in settings_view and
-      'ExternalFolderPicker { picked in' in settings_view and '.fileImporter(' not in settings_view,
-      "Settings › External drive picks a folder with Madeira's own picker, not SwiftUI's fileImporter")
+check('ExternalDriveSettings()' in library and 'ExternalFolderPicker.shared.present { picked in' in settings_view and
+      '.fileImporter(' not in settings_view and '.sheet(' not in settings_view,
+      "Settings › External drive picks a folder with Madeira's own picker, not SwiftUI's fileImporter or a sheet")
+# Build 57 on the iPad: in a SwiftUI sheet the picker was built three times in 15 ms and the one on
+# screen closed at once (the second try worked); UIKit now presents it from the top view controller.
+presenter = body_of(library, 'final class ExternalFolderPicker: NSObject, UIDocumentPickerDelegate {')
+check('let picker = madeira_folder_picker(self)' in presenter and 'top.present(picker, animated: true)' in presenter and
+      'while let next = top?.presentedViewController, !next.isBeingDismissed { top = next }' in presenter and
+      'func documentPickerWasCancelled(' in presenter and 'self.done = nil' in presenter,
+      'one picker per Choose, presented by UIKit; picked or cancelled ends it')
 # Build 56 on the iPad: inside LiveContainer, fileImporter's folder picker could not choose a folder
 # (Open did nothing), because LiveContainer's TweakLoader swaps the picker's types for item + folder.
 picker_m = (root / 'app/Madeira/FolderPicker.m').read_text(encoding='utf-8')
@@ -562,7 +569,7 @@ check('NSSelectorFromString(@"hook_initForOpeningContentTypes:asCopy:")' in pick
       "the picker calls UIKit's own initializer behind LiveContainer's exchanged hook (folders only, in place), "
       'only when that implementation is in UIKit, with ARC initializer semantics; the plain one otherwise')
 check('#import "FolderPicker.h"' in (root / 'app/Madeira/Madeira-Bridging-Header.h').read_text(encoding='utf-8') and
-      project.count('FolderPicker.m in Sources') == 2 and 'madeira_folder_picker(context.coordinator)' in library,
+      project.count('FolderPicker.m in Sources') == 2 and 'madeira_folder_picker(self)' in library,
       'FolderPicker.m is in the app target and bridged to Swift')
 start = body_of(content, '    private func startLibraryEntry(_ entry: LibraryEntry) {')
 check(start.index('LibraryModel.executable(entry.launchRelativePath, drive: entry.drive)') < start.index('try entry.validate()') <
