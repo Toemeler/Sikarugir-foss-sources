@@ -1171,6 +1171,8 @@ struct mad_resource {
     int borrowed;              /* texture belongs to a drawable; do not release */
     obj_handle_t resolve_tmp;  /* exec_resolve: render-target stand-in when this is a resolve destination without that usage */
     UINT resolve_tmp_w, resolve_tmp_h, resolve_tmp_pf;   /* the stand-in's size and pixel format, to replace it when they change */
+    obj_handle_t hud43_tmp;    /* madeira-bcd ui-hud-43: a copy of this UI canvas while its halves move to the screen's edges */
+    LONG64 hud43_frame;        /* the present it was last moved for (once a frame) */
     D3D12_RESOURCE_DESC desc;  /* as created; answered by GetDesc */
     /* ml905: typed-buffer views (Buffer<T> / RWBuffer<T>). The converter reads
      * a typed buffer as a texture buffer, so each distinct (format, offset,
@@ -8374,6 +8376,147 @@ static void mad_ui_log_inputs(struct mad_exec *e) {
         }
     }
 }
+/* madeira-bcd ui-hud-43 (opt-in; owner's request 2026-10-17: the HUD "is not at the bottom and
+ * at the top of the 4:3 screen"). Elden Ring lays its HUD out in a 16:9 band of its UI canvas (the
+ * middle 452 of 600 lines at 800x600) and blends the whole canvas over the 3D image in one draw:
+ * BlendUI_SDR2SDR samples t0 = the tone-mapped scene (r#709) and t1 = the UI canvas (r#710, the
+ * target of every UI pipeline; test 15, build 54). ui-hud-43 = the canvas's creation numbers (r#N in
+ * the [ui-scale] lines; 16,710 for Elden Ring at 800x600). Right before that draw, once a frame, the
+ * band's top half is copied to the canvas's top and its bottom half to the canvas's bottom (Metal
+ * blits through a copy of the canvas, in two encoders the fence chain orders), and the rows between
+ * are cleared, so the bars and the compass sit at the 4:3 screen's top and the items and messages at
+ * its bottom, undistorted. The scene is not touched. A full-screen menu is split the same way (a gap
+ * across its middle), which is why it is opt-in. ui-hud-43-ps names the composite's pixel shader. */
+static int g_hud43 = -1;
+static unsigned g_hud43_ser[8]; static int g_hud43_n;
+static char g_hud43_ps[256];
+static obj_handle_t g_hud43_zero; static UINT64 g_hud43_zero_len;
+static SRWLOCK g_hud43_lock = SRWLOCK_INIT;
+static int mad_hud43_on(void) {
+    if (g_hud43 < 0) {
+        AcquireSRWLockExclusive(&g_hud43_lock);
+        if (g_hud43 < 0) {
+            char v[128], *q;
+            int n = 0;
+            v[0] = 0;
+            mad_cfg_str_pe("ui-hud-43", v, sizeof v);   /* the HUD at a 4:3 screen's top and bottom: creation numbers (r#N, comma list) of the UI canvas whose 16:9 band is split to its edges */
+            for (q = v; *q && n < 8; ) {
+                while (*q && (*q < '0' || *q > '9')) q++;
+                if (!*q) break;
+                g_hud43_ser[n++] = (unsigned)strtoul(q, &q, 10);
+            }
+            g_hud43_ps[0] = 0;
+            mad_cfg_str_pe("ui-hud-43-ps", g_hud43_ps, sizeof g_hud43_ps);   /* with ui-hud-43: pixel shader entry of the draw that blends the UI canvas over the scene (default BlendUI_SDR2SDR) */
+            if (!g_hud43_ps[0]) snprintf(g_hud43_ps, sizeof g_hud43_ps, "BlendUI_SDR2SDR");
+            g_hud43_n = n;
+            if (n) d3d12_log("[ui-hud-43] the UI canvas (r#%u, %d number(s)) is split to the screen's top and bottom before %s\n",
+                             g_hud43_ser[0], n, g_hud43_ps);
+            MemoryBarrier();
+            g_hud43 = n ? 1 : 0;
+        }
+        ReleaseSRWLockExclusive(&g_hud43_lock);
+    }
+    return g_hud43;
+}
+static void mad_hud43_split(struct mad_exec *e, struct mad_resource *r) {
+    struct wmtcmd_blit_copy_from_texture_to_texture k;
+    struct wmtcmd_blit_copy_from_buffer_to_texture z;
+    UINT W = r->width, H = r->height, band, top, half, low, gap, bpr;
+    DXGI_FORMAT f = r->desc.Format;
+    static volatile LONG said;
+    if (!r->texture || r->tex_mips != 1 || r->tex_layers > 1) return;
+    if (f != DXGI_FORMAT_R8G8B8A8_UNORM && f != DXGI_FORMAT_R8G8B8A8_UNORM_SRGB && f != DXGI_FORMAT_R8G8B8A8_TYPELESS &&
+        f != DXGI_FORMAT_B8G8R8A8_UNORM && f != DXGI_FORMAT_B8G8R8A8_UNORM_SRGB && f != DXGI_FORMAT_B8G8R8A8_TYPELESS) return;
+    band = (UINT)(((UINT64)W * 9 + 8) / 16);
+    if (band + 2 > H) return;   /* 16:9 or wider already: nothing to move */
+    top = (H - band) / 2; half = band / 2; low = band - half; gap = H - band; bpr = W * 4;
+    if (!r->hud43_tmp) {
+        D3D12_RESOURCE_DESC td = r->desc;
+        struct WMTTextureInfo ti; enum WMTPixelFormat pf; int is_depth = 0;
+        td.Width = W; td.Height = H; td.DepthOrArraySize = 1; td.MipLevels = 1; td.SampleDesc.Count = 1;
+        td.Flags |= D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+        if (!mad_texinfo_from_desc(&td, &ti, &pf, &is_depth)) return;
+        ti.pixel_format = r->tex_pf;
+        r->hud43_tmp = MTLDevice_newTexture(e->q->device->mtl_device, &ti);
+        if (!r->hud43_tmp) return;
+    }
+    AcquireSRWLockExclusive(&g_hud43_lock);
+    if (!g_hud43_zero || g_hud43_zero_len < (UINT64)bpr * gap) {   /* zeros for the rows between (VirtualAlloc'd memory starts zeroed) */
+        void *cpu = NULL;
+        obj_handle_t b = mad_capbuf_alloc(e->q->device, (UINT64)bpr * gap, &cpu);
+        if (b) { g_hud43_zero = b; g_hud43_zero_len = (UINT64)bpr * gap; }   /* a smaller old one stays (a resize only) */
+    }
+    ReleaseSRWLockExclusive(&g_hud43_lock);
+    if (!g_hud43_zero) return;
+    if (!exec_begin_blit(e)) return;   /* ends the open pass; the draw begins it again */
+    memset(&k, 0, sizeof k);
+    k.type = WMTBlitCommandCopyFromTextureToTexture;
+    k.src = r->texture; k.dst = r->hud43_tmp;
+    k.src_size.width = W; k.src_size.height = H; k.src_size.depth = 1;
+    MTLBlitCommandEncoder_encodeCommands(e->benc, (const struct wmtcmd_base *)&k);
+    exec_end(e);   /* the copy back reads it: a second encoder, after this one */
+    if (!exec_begin_blit(e)) return;
+    k.src = r->hud43_tmp; k.dst = r->texture;
+    k.src_origin.y = top; k.src_size.height = half; k.dst_origin.y = 0;
+    MTLBlitCommandEncoder_encodeCommands(e->benc, (const struct wmtcmd_base *)&k);
+    k.src_origin.y = top + half; k.src_size.height = low; k.dst_origin.y = H - low;
+    MTLBlitCommandEncoder_encodeCommands(e->benc, (const struct wmtcmd_base *)&k);
+    memset(&z, 0, sizeof z);
+    z.type = WMTBlitCommandCopyFromBufferToTexture;
+    z.src = g_hud43_zero; z.src_offset = 0; z.bytes_per_row = bpr; z.bytes_per_image = (UINT64)bpr * gap;
+    z.size.width = W; z.size.height = gap; z.size.depth = 1;
+    z.dst = r->texture; z.origin.y = half;
+    MTLBlitCommandEncoder_encodeCommands(e->benc, (const struct wmtcmd_base *)&z);
+    exec_note_write(e, r);
+    if (InterlockedIncrement(&said) <= 4)
+        d3d12_log("[ui-hud-43] r#%u %ux%u: band %u lines from %u; top half to 0, bottom half to %u, %u lines cleared (present %lld)\n",
+                  r->serial, W, H, band, top, H - low, gap, (long long)g_presents_now);
+}
+/* The draw's SRV textures (tables in the bound SRV heap), at most `max`. */
+static unsigned mad_draw_srv_textures(struct mad_exec *e, struct mad_resource **out, unsigned max) {
+    const struct mad_rootsig *rs = e->rs;
+    unsigned i, ri, k, n = 0;
+    if (!rs) return 0;
+    for (i = 0; i < rs->nparams && i < MAD_ROOT_PARAM_MAX && n < max; i++) {
+        const struct madeira_ir_root_param *p = &rs->params[i];
+        UINT64 va = e->root[i];
+        const struct mad_heap *h = e->srv;
+        unsigned base, run = 0;
+        if (p->type != MADEIRA_IR_PARAM_TABLE) continue;
+        if (!h || !h->cpu || va < h->gpu_address || va >= h->gpu_address + (UINT64)h->count * sizeof(struct mad_descriptor)) continue;
+        base = (unsigned)((va - h->gpu_address) / sizeof(struct mad_descriptor));
+        for (ri = 0; ri < p->num_ranges && n < max; ri++) {
+            const struct madeira_ir_root_range *rg;
+            unsigned nd, off;
+            if (p->first_range + ri >= rs->nranges) break;
+            rg = &rs->ranges[p->first_range + ri];
+            nd = rg->num_descriptors;
+            if (nd == 0xffffffffu || nd > 16) nd = 16;
+            off = rg->table_offset != 0xffffffffu ? rg->table_offset : run;
+            run = off + nd;
+            if (rg->range_type != MADEIRA_IR_RANGE_SRV) continue;
+            for (k = 0; k < nd && base + off + k < h->count && n < max; k++) {
+                const struct mad_descriptor *de = &h->cpu[base + off + k];
+                struct mad_resource *r;
+                int xv = -1;
+                if (!de->texture_view_id || (de->metadata >> 63)) continue;
+                if ((r = mad_texture_of_view(e->q->device, de->texture_view_id, &xv))) out[n++] = r;
+            }
+        }
+    }
+    return n;
+}
+static void mad_hud43_draw(struct mad_exec *e) {
+    struct mad_resource *t[16];
+    unsigned n = mad_draw_srv_textures(e, t, 16), i;
+    int j;
+    for (i = 0; i < n; i++)
+        for (j = 0; j < g_hud43_n; j++)
+            if (t[i]->serial == g_hud43_ser[j] && t[i]->hud43_frame != g_presents_now) {
+                t[i]->hud43_frame = g_presents_now;
+                mad_hud43_split(e, t[i]);
+            }
+}
 static void exec_draw(struct mad_exec *e, const struct mad_cmd *c) {
     struct wmtcmd_render_setpso c_pso;
     struct wmtcmd_render_draw_indirect c_di;
@@ -8432,6 +8575,8 @@ static void exec_draw(struct mad_exec *e, const struct mad_cmd *c) {
     }
     if (g_census_on) { exec_capture_draw(e, c); exec_desc_check(e, e->rs, e->root, e->pso->vs_name); }   /* ml910/ml913 */
     if (g_skin_check > 0) mad_skin_draw(e, c);   /* madeira-bcd skin-check: before the pass, its captures are blits */
+    if (g_hud43 && mad_hud43_on() && e->pso->ps_name[0] && mad_name_in_list(g_hud43_ps, e->pso->ps_name))
+        mad_hud43_draw(e);   /* madeira-bcd ui-hud-43: before the pass, its moves are blits */
     if (!exec_begin_render(e)) { MAD_SKIP(e); return; }
     if (g_skip_ps_state && mad_skip_ps_match(e->pso)) { MAD_SKIP(e); return; }   /* madeira-bcd: diagnostic, off unless skip-ps is set */
     g_dump_tables = 0;
@@ -13411,6 +13556,7 @@ static ULONG STDMETHODCALLTYPE res_Release(ID3D12Resource *This) {
         if (r->buffer) NSObject_release(r->buffer);
         if (r->texture && !r->borrowed) NSObject_release(r->texture);
         if (r->resolve_tmp) NSObject_release(r->resolve_tmp);
+        if (r->hud43_tmp) NSObject_release(r->hud43_tmp);   /* madeira-bcd ui-hud-43 */
         if (r->placed_heap) { mad_pl_del(r->placed_heap, r); ID3D12Heap_Release((ID3D12Heap *)r->placed_heap); }   /* ml1145 */
         if (r->own_mem) {   /* ml1154: the GPU may still read it; free after its serial (reclaimed with the ml1148 list) */
             struct mad_device *md = r->owner; int queued = 0;
