@@ -645,6 +645,10 @@ jobs:
           key: ${{ steps.keys.outputs.vcrt }}
           path: app/Madeira/x86_64-vcruntime
 
+      - name: Wine Gecko
+        if: steps.appcheck.outputs.skip != 'true'
+        run: build/wine-gecko/fetch.sh
+
       # ------------------------------------------------------------------ app
       - name: Build
         if: steps.appcheck.outputs.skip != 'true'
@@ -715,7 +719,14 @@ jobs:
           missing_arm64 = sorted({"ntdll.dll", "wow64.dll", "wow64win.dll", "xtajit.dll"} - arm64)
           if missing_arm64:
               raise SystemExit("IPA is missing ARM64 WoW64 support: " + ", ".join(missing_arm64))
+          gecko_prefix = "Payload/Madeira.app/gecko/"
+          gecko = {name[len(gecko_prefix):].lower() for name in names if name.startswith(gecko_prefix)}
+          required_gecko = {"wine-gecko-2.47.4-x86.msi", "wine-gecko-2.47.4-x86_64.msi"}
+          missing_gecko = sorted(required_gecko - gecko)
+          if missing_gecko:
+              raise SystemExit("IPA is missing offline Wine Gecko packages: " + ", ".join(missing_gecko))
           print(f"Verified {len(dlls)} i386 DLLs in {ipa}")
+          print("Verified offline Wine Gecko x86 and x86_64 packages in IPA")
           PY
 
       - name: Determine release tag

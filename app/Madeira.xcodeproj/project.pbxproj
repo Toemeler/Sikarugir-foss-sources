@@ -596,6 +596,7 @@
 				A3000001 /* Frameworks */,
 				A3000003 /* Resources */,
 				A30000E2 /* Bundle Wine Mono */,
+				A30000E3 /* Bundle Wine Gecko */,
 				B3000003 /* Embed JIT Helper */,
 				B3000007 /* Embed StikJIT */,
 				A30000D1 /* Sign bundled dylibs */,
@@ -719,6 +720,21 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "set -e\n# Copy Wine Mono into the app (build/wine-mono/bundle.sh; inputs from build/wine-mono/fetch.sh,\n# see docs/BUILDING.md). Without build/wine-mono/wine-mono-<ver> the app is built without Mono.\nbash \"$SRCROOT/../build/wine-mono/bundle.sh\" \"$CODESIGNING_FOLDER_PATH/wine-mono\"\n";
+		};
+		A30000E3 /* Bundle Wine Gecko */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+			);
+			name = "Bundle Wine Gecko";
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -e\n# Wine's appwiz.cpl searches WINEDATADIR/gecko before opening the downloader.\nbash \"$SRCROOT/../build/wine-gecko/bundle.sh\" \"$CODESIGNING_FOLDER_PATH/gecko\"\n";
 		};
 		B3000007 /* Embed StikJIT */ = {
 			isa = PBXShellScriptBuildPhase;
