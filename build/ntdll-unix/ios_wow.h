@@ -52,6 +52,11 @@ extern ULONG_PTR ios_wow_base_for_peb( void *peb_id );
  * process, which makes this the per-process "is this a WoW process" test. */
 extern ULONG_PTR ios_wow_base(void);
 
+/* The (64-bit) PEB of the pseudo-process that owns the calling thread's
+ * window, or NULL when the caller has no window or the window is reserved but
+ * not bound yet.  Its 32-bit PEB is the page after it, as init_peb() lays out. */
+extern void *ios_wow_window_peb(void);
+
 /* Published by the app before __wine_main: nonzero when this session's MAIN
  * image is 32-bit.  virtual_init then arms the session and reserves the main
  * image's window before the system frameworks can take the slot.  0 for a

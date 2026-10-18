@@ -9886,6 +9886,12 @@ ULONG_PTR ios_wow_base(void)
     return slot ? slot->base : 0;
 }
 
+void *ios_wow_window_peb(void)
+{
+    struct ios_wow_window *slot = ios_wow_slot_current();
+    return slot ? slot->peb : NULL;
+}
+
 int ios_wow_in_window( const void *addr )
 {
     ULONG_PTR base = ios_wow_base();
@@ -11230,6 +11236,7 @@ int ios_wow_session_armed(void) { return 0; }
 void ios_wow_session_arm(void) { }
 ULONG_PTR ios_wow_base_for_peb( void *peb_id ) { return 0; }
 ULONG_PTR ios_wow_base(void) { return 0; }
+void *ios_wow_window_peb(void) { return NULL; }
 int ios_wow_in_window( const void *addr ) { return 0; }
 ULONG ios_wow_guest_addr( const void *host ) { return PtrToUlong( host ); }
 void ios_wow_translate_limits( ULONG_PTR *l, ULONG_PTR *h ) { }

@@ -3858,8 +3858,11 @@ DECLSPEC_EXPORT void wine_ios_child_main( int argc, char *argv[], int child_fd_s
              * way and NtCreateUserProcess returned c00000e5.
              * Clearing it here makes the derivation per-process: init_peb
              * re-publishes it for a 32-bit child, and if it comes back NULL
-             * this child is 64-bit and the 32-bit sibling's value (still live
-             * and blocked in NtCreateUserProcess) is restored. */
+             * this child is 64-bit and the 32-bit sibling's value is restored.
+             * The sibling is NOT necessarily blocked meanwhile (a 64-bit
+             * service child can boot while it runs), so a 32-bit process must
+             * not read this global for itself: ProcessWow64Information answers
+             * from the caller's own window (process_ios.c). */
             WOW_PEB *saved_wow_peb = wow_peb;
 
             wow_peb = NULL;

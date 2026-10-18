@@ -42,6 +42,10 @@ code sees) lives at host address `B + a`.
   class, 1010) returns a process's `B`, or 0 for a 64-bit process. `wow64.dll`
   and the FEX WOW64 module read it once at process start. A failed query means
   `B = 0`, i.e. upstream Wine behaviour.
+- **The 32-bit PEB is per process too.** `ProcessWow64Information` on the
+  current process answers from the caller's own window (its PEB plus one page),
+  never from the session-global `wow_peb`, which a booting child clears for a
+  moment and a later 32-bit child overwrites.
 - **The unix side** (`build/ntdll-unix/*_ios.c`, win32u, the wineserver)
   speaks host addresses. A ceiling a 32-bit process sends down (`zero_bits`, a
   `MEM_ADDRESS_REQUIREMENTS` limit, `HighestUserAddress`) is a guest number,

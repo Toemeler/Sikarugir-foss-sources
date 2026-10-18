@@ -3909,7 +3909,24 @@ NTSTATUS WINAPI NtQueryInformationProcess( HANDLE handle, PROCESSINFOCLASS class
         len = sizeof(ULONG_PTR);
         if (size != len) return STATUS_INFO_LENGTH_MISMATCH;
         if (handle == GetCurrentProcess())
+        {
             *(ULONG_PTR *)info = is_old_wow64() ? (ULONG_PTR)peb : (ULONG_PTR)wow_peb;
+#ifdef WINE_IOS
+            /* iOS-Madeira `wow_peb` is a SESSION global: every child boot
+             * clears it while unix_init_startup_info() runs (loader_ios.c) and
+             * a later 32-bit child overwrites it.  A 32-bit process whose
+             * wow64.dll asked here at that moment got NULL and faulted in
+             * process_init writing WOW64INFO at PEB32+0x480 (seen while a
+             * 64-bit service child booted next to it).  A process with a
+             * window answers from its own PEB, laid out as init_peb() does;
+             * every other caller keeps the answer above. */
+            if (!is_old_wow64() && ios_wow_base())
+            {
+                char *own_peb = ios_wow_window_peb();
+                if (own_peb) *(ULONG_PTR *)info = (ULONG_PTR)(own_peb + page_size);
+            }
+#endif
+        }
         else
         {
             ULONG_PTR val = 0;
