@@ -24,6 +24,7 @@
 #include <pwd.h>
 #include <limits.h>
 #include <string.h>
+#include <strings.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <sys/sysctl.h>
@@ -563,6 +564,67 @@ static uint16_t madeira_target_machine(const char *exe, const char *prefix, NSSt
             return 0;
     }
     return madeira_pe_machine(probe);
+}
+
+/* Nonzero when a drive path ("X:\...\name.exe", quotes dropped) in MADEIRA_ARGS
+ * names an i386 PE. A library game in the Wine desktop starts as
+ * `explorer.exe /desktop=shell,WxH "<exe>" args`, or with `cmd /c "<x>.bat"` for a
+ * .bat game and the services batch (Library.swift launchCommand/servicesBatch), so
+ * the program itself is only named here or in that batch: a .bat/.cmd path is read
+ * (one level, the first 64 KB) and its lines are scanned the same way. */
+static int g_madeira_gdi_section_by_probe;   /* set below for one session; unset when it ends */
+static int madeira_args_name_i386_depth(const char *args, const char *prefix, NSString *bundle, int depth)
+{
+    char tok[PATH_MAX];
+    const char *r = args;
+
+    while (r && *r)
+    {
+        size_t n = 0, len;
+        int quoted = 0;
+
+        while (*r == ' ' || *r == '\t' || *r == '\r' || *r == '\n') r++;
+        if (!*r) break;
+        while (*r && *r != '\r' && *r != '\n' && (quoted || (*r != ' ' && *r != '\t')))
+        {
+            if (*r == '"') { quoted = !quoted; r++; continue; }
+            if (n < sizeof(tok) - 1) tok[n++] = *r;
+            r++;
+        }
+        tok[n] = 0;
+        len = strlen(tok);
+        if (len <= 7 || !((tok[0] >= 'A' && tok[0] <= 'Z') || (tok[0] >= 'a' && tok[0] <= 'z')) ||
+            tok[1] != ':' || tok[2] != '\\')
+            continue;
+        if (!strcasecmp(tok + len - 4, ".exe") &&
+            madeira_target_machine(tok, prefix, bundle) == MADEIRA_IMAGE_FILE_MACHINE_I386)
+            return 1;
+        if (!depth && (!strcasecmp(tok + len - 4, ".bat") || !strcasecmp(tok + len - 4, ".cmd")))
+        {
+            char unix_path[PATH_MAX], *text;
+            FILE *f;
+            size_t got;
+            int found = 0;
+
+            if (madeira_dos_to_unix(tok, prefix, unix_path, sizeof(unix_path)) ||
+                !(f = fopen(unix_path, "rb")))
+                continue;
+            if ((text = malloc(65536 + 1)))
+            {
+                got = fread(text, 1, 65536, f);
+                text[got] = 0;
+                found = madeira_args_name_i386_depth(text, prefix, bundle, 1);
+                free(text);
+            }
+            fclose(f);
+            if (found) return 1;
+        }
+    }
+    return 0;
+}
+static int madeira_args_name_i386(const char *args, const char *prefix, NSString *bundle)
+{
+    return madeira_args_name_i386_depth(args, prefix, bundle, 0);
 }
 
 /* "X:\a\b" on the unix side: C: is <prefix>/drive_c/a/b, exactly as the launch
@@ -1570,6 +1632,25 @@ static void *wine_process_thread(void *arg) {
                 is_i386_target ? " (i386: WoW64)" :
                 target_machine == MADEIRA_IMAGE_FILE_MACHINE_I386 ? " (i386, but the bundle has no i386-windows)" : "");
         if (is_i386_target) use_arm64ec = NO;
+        /* A 64-bit host that starts a 32-bit program (a library game in the Wine
+         * desktop: explorer.exe with the program in MADEIRA_ARGS) needs the GDI
+         * handle table that 32-bit programs can map inside their guest window.
+         * win32u decides once, when the host initialises it, before any 32-bit
+         * process arms the session (wine dlls/win32u/gdiobj.c,
+         * gdi_shared_use_section); left to that default the table was private
+         * host memory and the program's 32-bit gdi32 faulted on its first GDI
+         * handle through the truncated address. ContentView.startDock does the
+         * same for Dock sessions. madeira.cfg's env.MADEIRA_GDI_SHARED_SECTION,
+         * already exported above, wins. */
+        if (has_i386_set && !is_i386_target && !getenv("MADEIRA_GDI_SHARED_SECTION")) {
+            const char *host_args = getenv("MADEIRA_ARGS");
+            if (host_args && madeira_args_name_i386(host_args, g_prefix_path, bundleForProbe)) {
+                setenv("MADEIRA_GDI_SHARED_SECTION", "1", 1);
+                g_madeira_gdi_section_by_probe = 1;
+                dprintf(STDERR_FILENO, "[WineProc] 64-bit host starts a 32-bit program: "
+                        "MADEIRA_GDI_SHARED_SECTION=1 for this session\n");
+            }
+        }
         const char *bundle_subdir = use_arm64ec ? "arm64ec-windows" : "aarch64-windows";
         LOG("Target exe: %{public}s (bundle=%{public}s)", madeira_exe, bundle_subdir);
         dprintf(STDERR_FILENO, "[WineProc] Target exe: %s (bundle=%s)\n", madeira_exe, bundle_subdir);
@@ -2059,6 +2140,8 @@ static void *wine_process_thread(void *arg) {
         unsetenv("MADEIRA_CPU_COUNT"); unsetenv("DXMT_D9_ANISO_LIMIT");
         unsetenv("FEX_X87REDUCEDPRECISION");   /* ml1184 */
         unsetenv("MADEIRA_DINPUT_PAD");        /* ml1240 */
+        /* the GDI section the PE probe chose for a 32-bit program started by a 64-bit host */
+        if (g_madeira_gdi_section_by_probe) { unsetenv("MADEIRA_GDI_SHARED_SECTION"); g_madeira_gdi_section_by_probe = 0; }
         /* madeira-bcd: Horizon Zero Dawn's per-game switches must not reach a later game
          * of this app run (GTA V Enhanced runs without them). */
         unsetenv("MADEIRA_SRV_FGETPATH");

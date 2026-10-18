@@ -11,8 +11,10 @@ map inside its guest window (wine dlls/win32u/gdiobj.c gdi_shared_use_section). 
 Dock start now asks for the section; madeira.cfg can still turn it off.
 
 Checks:
-  * startDock sets MADEIRA_GDI_SHARED_SECTION=1 once, before the launch request, and
-    nothing else in the app sets or clears it (the regular launch path is unchanged);
+  * startDock sets MADEIRA_GDI_SHARED_SECTION=1 once, before the launch request;
+  * the bridge sets it for a regular launch only when a 64-bit host starts a 32-bit
+    program (PE probe of MADEIRA_ARGS), only if madeira.cfg left it unset, and clears
+    that choice when the session ends;
   * the bridge exports madeira.cfg env.* entries with setenv(..., 1) when the session
     starts, i.e. after startDock, so env.MADEIRA_GDI_SHARED_SECTION = 0 still wins;
   * when the wine submodule is checked out: gdi_shared_use_section(), compiled
@@ -47,16 +49,28 @@ for path in sorted(app.rglob('*')):
         continue
     text = path.read_text(encoding='utf-8', errors='replace')
     count = text.count('"MADEIRA_GDI_SHARED_SECTION"')
-    expected = 1 if path.name == 'ContentView.swift' else 0
+    # ContentView: startDock. The bridge: getenv/setenv/unsetenv of the PE-probe rule below.
+    expected = {'ContentView.swift': 1, 'WineProcessBridge.m': 3}.get(path.name, 0)
     if count != expected:
         require(False, f'{path.name}: MADEIRA_GDI_SHARED_SECTION appears {count} time(s), expected {expected}')
-require(content.count('"MADEIRA_GDI_SHARED_SECTION"') == 1, 'nothing else in ContentView touches it (regular launches unchanged)')
+require(content.count('"MADEIRA_GDI_SHARED_SECTION"') == 1, 'nothing else in ContentView touches it')
 
 bridge = (app / 'WineProcessBridge.m').read_text(encoding='utf-8')
 export = bridge.index('if (![line hasPrefix:@"env."] || eq.location == NSNotFound) continue;')
 # ml1184 grew the export loop (a game's own keys win), so look to the end of it.
 require('setenv(k.UTF8String, v.UTF8String, 1);' in bridge[export:export + 6000],
         'madeira.cfg env.* entries are exported with overwrite when the session starts')
+
+# A regular launch whose 64-bit host (explorer.exe in the Wine desktop) starts a 32-bit
+# program asks for the section too, but only when nothing set the variable: the
+# bridge decides after madeira.cfg's export, so env.MADEIRA_GDI_SHARED_SECTION wins.
+probe = bridge.index('!getenv("MADEIRA_GDI_SHARED_SECTION")')
+require(probe > export, 'the PE-probe rule runs after madeira.cfg is exported')
+rule = bridge[probe:probe + 600]
+require('has_i386_set && !is_i386_target' in bridge[probe - 80:probe] and
+        'madeira_args_name_i386(' in rule, 'only for a 32-bit program named in MADEIRA_ARGS')
+require('unsetenv("MADEIRA_GDI_SHARED_SECTION")' in bridge and 'g_madeira_gdi_section_by_probe' in bridge,
+        'the probe\'s choice ends with its session')
 
 gdiobj = root / 'wine' / 'dlls' / 'win32u' / 'gdiobj.c'
 if gdiobj.exists():
