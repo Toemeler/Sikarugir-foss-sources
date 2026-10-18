@@ -196,7 +196,7 @@ jobs:
             "$(git hash-object .github/scripts/configure_wine.sh)" "$GNUTLS" "$FFMPEG" "$FREETYPE")"
           DXMT="dxmt-$V-$(k "$(t dxmt)" "$(t build/dxmt-ios)" "$(t build/madeira-d3d12)" \
             "$(t build/madeira_cfg.h)" "$(t madeira-d3d12)" "$(t app/Madeira/d3d12)" "$LLVM_KEY")"
-          WOW64="wow64-$V-$(k "$(t wine)" "$(t dxmt)" "$(t build/wine-i386)" "$MINGW")"
+          WOW64="wow64-$V-$(k "$(t wine)" "$(t dxmt)" "$(t build/wine-i386)" "$(t build/d3d8to9)" "$MINGW")"
           PAIRING="pairing-$V-$(k "$(t build/rppairing-ios)")"
           DOCK="dock-$V-$(k "$(t madeira-dock)" "$(t build/madeira-dock)" "$MINGW")"
           FEXEC="fexec-$V-$(k "$(t FEX)" "$(t build/fex-arm64ec)" "$MINGW")"
@@ -318,7 +318,9 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           key: ${{ steps.keys.outputs.vcrt }}
-          path: app/Madeira/x86_64-vcruntime
+          path: |
+            app/Madeira/x86_64-vcruntime
+            app/Madeira/i386-vcruntime
 
       - name: "Cache: Xcode compilation cache"
         if: steps.appcheck.outputs.skip != 'true'
@@ -539,10 +541,13 @@ jobs:
           test -s app/Madeira/i386-windows/user32.dll
           test -s app/Madeira/i386-windows/comctl32.dll
           grep -Eq '^== [0-9]+ files in app/Madeira/i386-windows, 0 missing imports ==$' wow64-build.log
+          # Kept in the bundle: env.MADEIRA_EXE = hello-x86.exe is the on-device
+          # smoke test of the 32-bit path (docs/WOW64.md, "Building", step 4).
           tests/x86/build.sh hello-x86
           toolchains/$MINGW/bin/i686-w64-mingw32-objdump -f app/Madeira/i386-windows/hello-x86.exe | grep -qi 'file format pe-i386'
-          rm app/Madeira/i386-windows/hello-x86.exe
-          echo "Validated i386 Wine farm and 32-bit PE smoke-test fixture."
+          # d3d8.dll is d3d8to9 (native PE), not Wine's wined3d frontend.
+          toolchains/$MINGW/bin/llvm-objdump -p app/Madeira/i386-windows/d3d8.dll | grep -q 'DLL Name: d3d9.dll'
+          echo "Validated i386 Wine farm, d3d8to9 and the 32-bit PE smoke test."
       - name: "Save: WoW64 i386 DLL farm"
         if: steps.appcheck.outputs.skip != 'true' && steps.c-wow64.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
@@ -626,31 +631,35 @@ jobs:
           key: ${{ steps.keys.outputs.fexec }}
           path: app/Madeira/arm64ec-windows/xtajit64.dll
 
+      # Required: a program built with MSVC that imports a runtime DLL Wine only
+      # partly implements (or MFC, which Wine lacks) stops at once without it.
       - name: Visual C++ runtime
         if: steps.appcheck.outputs.skip != 'true' && steps.c-vcrt.outputs.cache-hit != 'true'
         id: vcrt
-        # Best effort; the app builds without them (the folder only has to exist).
-        continue-on-error: true
         run: |
           set -euo pipefail
-          mkdir -p app/Madeira/x86_64-vcruntime
+          mkdir -p app/Madeira/x86_64-vcruntime app/Madeira/i386-vcruntime
           .github/scripts/fetch_vcruntime.sh
-          # Cached only when complete, so a partial download is retried next time.
-          N=$(find app/Madeira/x86_64-vcruntime -name '*.dll' | wc -l | tr -d ' ')
-          echo "complete=$([ "$N" -ge 14 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          N64=$(find app/Madeira/x86_64-vcruntime -name '*.dll' | wc -l | tr -d ' ')
+          N32=$(find app/Madeira/i386-vcruntime -name '*.dll' | wc -l | tr -d ' ')
+          echo "x64: $N64, x86: $N32"
+          test "$N64" -ge 14 && test "$N32" -ge 13
+          echo "complete=true" >> "$GITHUB_OUTPUT"
       - name: "Save: Visual C++ runtime"
         if: steps.appcheck.outputs.skip != 'true' && steps.vcrt.outputs.complete == 'true'
         uses: actions/cache/save@v4
         with:
           key: ${{ steps.keys.outputs.vcrt }}
-          path: app/Madeira/x86_64-vcruntime
+          path: |
+            app/Madeira/x86_64-vcruntime
+            app/Madeira/i386-vcruntime
 
       # ------------------------------------------------------------------ app
       - name: Build
         if: steps.appcheck.outputs.skip != 'true'
         run: |
           set -o pipefail
-          mkdir -p app/Madeira/x86_64-vcruntime
+          mkdir -p app/Madeira/x86_64-vcruntime app/Madeira/i386-vcruntime
           # COMPILATION_CACHE_ENABLE_CACHING: Xcode 26's content-addressed
           # compilation cache, restored above, so unchanged files are not
           # compiled again.
@@ -715,7 +724,20 @@ jobs:
           missing_arm64 = sorted({"ntdll.dll", "wow64.dll", "wow64win.dll", "xtajit.dll"} - arm64)
           if missing_arm64:
               raise SystemExit("IPA is missing ARM64 WoW64 support: " + ", ".join(missing_arm64))
-          print(f"Verified {len(dlls)} i386 DLLs in {ipa}")
+          def folder(sub):
+              p = f"Payload/Madeira.app/{sub}/"
+              return {n[len(p):].lower() for n in names if n.startswith(p) and not n.endswith("/")}
+          vc64 = {f for f in folder("x86_64-vcruntime") if f.endswith(".dll")}
+          vc32 = {f for f in folder("i386-vcruntime") if f.endswith(".dll")}
+          if len(vc64) < 14 or len(vc32) < 13:
+              raise SystemExit(f"IPA has {len(vc64)} x64 and {len(vc32)} x86 Visual C++ runtime DLLs (want 14 and 13)")
+          if "hello-x86.exe" not in bundled:
+              raise SystemExit("IPA is missing the 32-bit smoke test hello-x86.exe")
+          with zipfile.ZipFile(ipa) as z:
+              d3d8 = z.read(prefix + "d3d8.dll")
+          if b"Wine builtin DLL" in d3d8[:0x80]:
+              raise SystemExit("i386 d3d8.dll is Wine's wined3d frontend, not d3d8to9")
+          print(f"Verified {len(dlls)} i386 DLLs, {len(vc64)}+{len(vc32)} VC++ runtime DLLs and d3d8to9 in {ipa}")
           PY
 
       - name: Determine release tag

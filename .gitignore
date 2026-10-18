@@ -133,6 +133,7 @@ build/wine-mono/wine-mono-*
 # redistributable terms and only unmodified. Not ours to ship -- obtain them
 # yourself, see tools/fetch-vcruntime.md.
 app/Madeira/x86_64-vcruntime/*.dll
+app/Madeira/i386-vcruntime/*.dll
 research/remote-metal/host/rmetald
 research/remote-metal/guest/rmtest
 
@@ -170,3 +171,7 @@ app/Madeira/arm64ec-windows/dock-notices.txt
 
 # faultrep.dll: build/faultrep/build.sh (its install goes into the tracked farm)
 build/faultrep/out/
+
+# d3d8to9 source and build tree, fetched at a pinned commit by build/d3d8to9/build.sh.
+build/d3d8to9/src/
+build/d3d8to9/build-i386/

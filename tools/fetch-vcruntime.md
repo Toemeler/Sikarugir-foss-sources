@@ -17,7 +17,16 @@ msvcp140_2.dll             vcomp140.dll               mfc140.dll
 msvcp140_atomic_wait.dll                              mfc140u.dll
 ```
 
-## How to get them
+32-bit programs (WoW64, docs/WOW64.md) use the x86 build of the same runtime:
+thirteen files in `app/Madeira/i386-vcruntime/` (the list above without
+`vcruntime140_1.dll`, which exists for x64 only), from `VC_redist.x86.exe`.
+
+`.github/scripts/fetch_vcruntime.sh` fetches both sets, which is what CI runs.
+The redistributable is a WiX Burn bundle: the DLLs sit in cabinets appended to
+the exe, named like `msvcp140.dll_amd64`, which is why the script carves the
+cabinets out by their `MSCF` header rather than relying on 7-Zip to open the exe.
+
+## How to get them by hand
 
 Download the official x64 redistributable from Microsoft
 (`VC_redist.x64.exe`) and extract it. On macOS, 7-Zip can do this:

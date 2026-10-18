@@ -174,6 +174,29 @@ exported as `d3d9shim.dll` whatever file name it is installed under):
 
 `build/wine-i386/build.sh` installs the shim as `d3d9.dll` and `d3d9shim.dll`
 and the emulated frontend as `d3d9-emulated.dll`.
+
+### Direct3D 8
+
+The i386 `d3d8.dll` is d3d8to9 (`build/d3d8to9/build.sh`, BSD-2-Clause), not
+Wine's: Wine's d3d8 is a wined3d frontend and wined3d has no backend here (no
+OpenGL, `--without-vulkan`). d3d8to9 implements D3D8 with `Direct3DCreate9`
+from the farm's `d3d9.dll` above, so a D3D8 program reaches Metal through the
+same path as a D3D9 one. For D3D8 shaders it loads the farm's `d3dx9_43.dll`
+(Wine's `D3DXAssembleShader`/`D3DXDisassembleShader`).
+
+DirectDraw and Direct3D 7 and older (`ddraw.dll`), OpenGL, Vulkan and Wine's
+`d3d12.dll` still have no renderer for 32-bit programs.
+
+### Visual C++ runtime
+
+`i386-vcruntime/` carries Microsoft's x86 Visual C++ 2015-2022 runtime and MFC,
+taken unmodified from `VC_redist.x86.exe` at build time
+(`.github/scripts/fetch_vcruntime.sh`). Each session links them into
+`C:\windows\syswow64` over the farm's links (`madeira_overlay_vcrt_i386` in
+`WineProcessBridge.m`), replacing Wine's partial builtins; Wine has no MFC.
+There is no exemption list as on ARM64EC: every 32-bit DLL runs as x86 code
+under FEX. `env.MADEIRA_WINE_VCRT = 1` keeps Wine's builtins, and
+`env.MADEIRA_MFC = 0` leaves MFC out.
 `tests/x86/build-d3d9-cube.sh` builds the acceptance test, a spinning
 cube through a real device with a dynamic vertex buffer the guest locks every
 frame.
@@ -258,6 +281,8 @@ the switch is only consulted for a WoW64 process, window or thread.
 | `MADEIRA_CPU_COUNT` | unset | per launch | Overrides the `cpu-count` key for one program (unset: unchanged) |
 | `MADEIRA_STRICT_SPLITLOCK` | on | FEX WOW64 | `StrictInProcessSplitLocks` default for 32-bit guests (an explicit FEX setting wins) |
 | `MADEIRA_WOW_SYSCALL_SWEEP` | on | FEX WOW64 | Let the code-buffer sweeper move threads parked in a system call |
+| `MADEIRA_WINE_VCRT` | unset | session | 1: Wine's i386 (and ARM64EC) Visual C++ builtins instead of Microsoft's runtime |
+| `MADEIRA_MFC` | unset | session | 0: no MFC in system32/syswow64 |
 | `MADEIRA_D3D9` | unset (emulated) | i386 `d3d9.dll` | `native`: the D3D9 shim uses the native ARM64 frontend. Also set by the `d3d9` key of `madeira.cfg` |
 | `MADEIRA_WOW_RWX_PLAIN` | unset (automatic) | 32-bit | Anonymous RWX memory in a window is plain read/write to the host once Wine Mono's `libmono-2.0-x86.dll` is mapped there; 1: in every window, 0: never (stores go through the JIT pool's alias, as before; also keeps FEX's Mono bridge off) |
 | `MADEIRA_WINEMONO_BRIDGE` | automatic for `libmono-2.0-x86.dll` | FEX WOW64 | FEX's Mono backpatcher bridge (ml712) and, once it finds the backpatcher, SMC detection off for the process (ml1280); 0 keeps both off. The 64-bit runtime still needs 1 |
@@ -268,15 +293,21 @@ keeps its default of 1.
 
 ## 9. Building
 
-The i386 and aarch64 WoW64 binaries are built from the pinned submodules;
-none are committed with the code.
+The i386 farm is built from the pinned submodules by CI and is not committed.
+The aarch64 side (`ntdll.dll`, `wow64.dll`, `wow64win.dll`, `xtajit.dll`) is
+committed in `app/Madeira/aarch64-windows/`, built with steps 2 and 3 below:
+`ntdll`/`wow64`/`wow64win` on 2026-09-29 and `xtajit` on 2026-10-15. Rebuild
+them when the Wine pin changes `dlls/ntdll/ntsyscalls.h`,
+`dlls/win32u/win32syscalls.h`, `dlls/wow64/` or `dlls/wow64win/`; the i386
+ntdll and win32u must agree with them on syscall numbers.
 
 1. **i386 farm:** `build/wine-i386/build.sh` configures `wine/build-i386`
    (`--enable-archs=i386`), builds every i386 module the tree has a rule for
    minus a documented skip list, strips and installs into
    `app/Madeira/i386-windows/`, builds DXMT's i386 `d3d11`/`dxgi`/`d3d10core`/
    `winemetal` against that tree with meson, and reports the farm's import
-   closure. `build/wine-i386/build.sh kernel32 user32` rebuilds only those
+   closure. It also builds d3d8to9 as the farm's `d3d8.dll` (Direct3D 8,
+   above). `build/wine-i386/build.sh kernel32 user32` rebuilds only those
    modules; `SKIP_DXMT=1` leaves DXMT out. The unix side needs
    `libdxmt_combined.a` rebuilt from the pinned DXMT (`build/dxmt-ios/build.sh`),
    which carries winemetal's 32-bit table.
@@ -293,7 +324,7 @@ none are committed with the code.
    `wow64fex` and installs `Bin/libwow64fex.dll` as
    `app/Madeira/aarch64-windows/xtajit.dll`.
 4. **Smoke test:** `tests/x86/build.sh hello-x86` builds a kernel32-only
-   i386 PE into `app/Madeira/i386-windows/`. Put `env.MADEIRA_EXE = hello-x86.exe`
+   i386 PE into `app/Madeira/i386-windows/`; CI keeps it in the app. Put `env.MADEIRA_EXE = hello-x86.exe`
    in `madeira.cfg` and launch: the log shows
    `PE probe: machine=0x14c (i386: WoW64)`, the program's
    `MADEIRA-X86-32: hello from a 32-bit PE`, and exit code 42.

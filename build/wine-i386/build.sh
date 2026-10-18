@@ -24,6 +24,8 @@
 # port (no OpenGL, --without-vulkan), so those are never installed from Wine.
 # d3d9 is DXMT's too: its thin shim ships as d3d9.dll and forwards to the
 # emulated frontend (d3d9-emulated.dll) unless madeira.cfg says d3d9 = native.
+# d3d8 is d3d8to9 (build/d3d8to9), which turns D3D8 calls into D3D9 ones on
+# that same shim: Wine's d3d8 would need wined3d's missing backend.
 set -euo pipefail
 
 R="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -78,6 +80,7 @@ SKIP_REASON=(
   "winedbg.exe=4.5 MiB debugger only the (unshown) crash dialog spawns; dbghelp.dll ships"
   "d3d11.dll|dxgi.dll|d3d10core.dll|winemetal.dll=DXMT-owned (installed below); Wine's are wined3d frontends with no backend here"
   "d3d9.dll=DXMT-owned: the shim and the emulated frontend are installed below"
+  "d3d8.dll=d3d8to9 (installed below) translates D3D8 to DXMT's D3D9; Wine's is a wined3d frontend with no backend here"
 )
 SKIP=()
 for e in "${SKIP_REASON[@]}"; do IFS='|' read -r -a n <<< "${e%%=*}"; SKIP+=("${n[@]}"); done
@@ -165,6 +168,10 @@ EOF
     "$STRIP" -o "$DEST/d3d9shim.dll" build-pe-i386/src/d3d9shim/d3d9shim.dll
     "$STRIP" -o "$DEST/d3d9-emulated.dll" build-pe-i386/src/d3d9/d3d9.dll
     echo "== installed DXMT i386 d3d11/dxgi/d3d10core/winemetal and d3d9 (shim + emulated) =="
+
+    # D3D8 on top of that d3d9.dll (build/d3d8to9/build.sh).
+    TC="$TC" "$R/build/d3d8to9/build.sh" "$DEST/d3d8.dll"
+    echo "== installed d3d8to9 as d3d8.dll =="
 fi
 
 # ----------------------------------------------------------- import closure

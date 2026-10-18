@@ -753,6 +753,49 @@ static void madeira_link_syswow64(NSFileManager *fm, NSString *prefix, NSString 
     dprintf(STDERR_FILENO, "[WineProc] Farm syswow64: %d links -> i386-windows\n", linked);
 }
 
+/* C:\windows\syswow64: Microsoft's x86 Visual C++ runtime (i386-vcruntime,
+ * from VC_redist.x86.exe by .github/scripts/fetch_vcruntime.sh) over Wine's
+ * partial i386 builtins, after madeira_link_syswow64 has linked the farm.
+ * Wine has no MFC at all, so a 32-bit program importing mfc140 could not
+ * start without this. Unlike the ARM64EC overlay there is no exemption: a
+ * WoW64 process runs every 32-bit DLL as x86 code under FEX, as Windows on
+ * ARM does, with no x64<->EC transition on the exception path.
+ *   env.MADEIRA_WINE_VCRT = 1  keeps Wine's builtins (and no MFC)
+ *   env.MADEIRA_MFC = 0        leaves MFC out */
+static void madeira_overlay_vcrt_i386(NSFileManager *fm, NSString *prefix, NSString *bundle)
+{
+    NSString *farmDir = [prefix stringByAppendingPathComponent:@"drive_c/windows/syswow64"];
+    NSString *source = [bundle stringByAppendingPathComponent:@"i386-vcruntime"];
+    NSString *builtins = [bundle stringByAppendingPathComponent:@"i386-windows"];
+    const char *wineVcrt = getenv("MADEIRA_WINE_VCRT");
+    const char *mfcEnv = getenv("MADEIRA_MFC");
+    const BOOL keepWine = wineVcrt && wineVcrt[0] == '1';
+    const BOOL mfcOff = mfcEnv && mfcEnv[0] == '0';
+    int linked = 0, kept = 0;
+
+    for (NSString *f in [fm contentsOfDirectoryAtPath:source error:nil])
+    {
+        if (![[f lowercaseString] hasSuffix:@".dll"]) continue;
+        NSString *dst = [farmDir stringByAppendingPathComponent:f];
+        NSString *builtin = [builtins stringByAppendingPathComponent:f];
+        BOOL useWine = keepWine || (mfcOff && [[f lowercaseString] hasPrefix:@"mfc"]);
+        [fm removeItemAtPath:dst error:nil];
+        if (useWine)
+        {
+            /* back to the farm's link, or nothing for a DLL Wine lacks (MFC) */
+            if ([fm fileExistsAtPath:builtin] &&
+                [fm createSymbolicLinkAtPath:dst withDestinationPath:builtin error:nil])
+                kept++;
+            continue;
+        }
+        if ([fm createSymbolicLinkAtPath:dst
+                     withDestinationPath:[source stringByAppendingPathComponent:f] error:nil])
+            linked++;
+    }
+    dprintf(STDERR_FILENO, "[WineProc] syswow64: %d MS x86 VC++ runtime DLLs linked, %d kept as Wine builtins%s\n",
+            linked, kept, keepWine ? " (MADEIRA_WINE_VCRT=1)" : "");
+}
+
 /* <system_dir>\wbem: syswow64\wbem from the i386 farm for 32-bit targets,
  * system32\wbem from the session's farm for 64-bit ones. The farms are flat,
  * but WMI's registered InprocServer32 paths are C:\windows\system32\wbem\<name>
@@ -1630,6 +1673,7 @@ static void *wine_process_thread(void *arg) {
              * loader with c0000135 for DLLs syswow64 still had. */
             if (has_i386_set) {
                 madeira_link_syswow64(fm, prefix, bundlePath);
+                madeira_overlay_vcrt_i386(fm, prefix, bundlePath);
                 madeira_link_syswow64_wbem(fm, prefix, bundlePath);
                 madeira_seed_winsxs_x86(fm, prefix, bundlePath);
             }
