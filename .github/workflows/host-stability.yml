@@ -21,6 +21,8 @@ jobs:
         run: python3 tests/host/check-game-recommendations.py --require-swift
       - name: "External drive (bookmarks, D: link, probe, file-map fallback)"
         run: python3 tests/host/check-external-drive.py --require-swift
+      - name: "External drive over USB / Wi-Fi (drive bridge requests)"
+        run: python3 tests/host/check-drive-bridge.py --require-swift
   swap-tier:
     name: Swap tier core (Linux headers)
     runs-on: ubuntu-latest

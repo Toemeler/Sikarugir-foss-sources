@@ -22,6 +22,7 @@ struct MadeiraApp: App {
                     GamepadInput.shared.start()
                     HardwareInput.shared.start()
                     JITNetworkShortcut.shared.restoreLeftover()   // also starts its network path monitor
+                    DriveBridge.shared.start()   // the external drive for a PC over USB / Wi-Fi (Documents/drive-bridge)
                 }
                 // madeira://jit-network/... (the Madeira JIT shortcut returning, JITNetwork.swift),
                 // else madeira://play?exe=... (Home Screen shortcuts, SavesAndShortcuts.swift).
