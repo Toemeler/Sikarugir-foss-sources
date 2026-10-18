@@ -540,7 +540,7 @@ jobs:
           test -s app/Madeira/i386-windows/comctl32.dll
           grep -Eq '^== [0-9]+ files in app/Madeira/i386-windows, 0 missing imports ==$' wow64-build.log
           tests/x86/build.sh hello-x86
-          toolchains/$MINGW/bin/i686-w64-mingw32-objdump -f app/Madeira/i386-windows/hello-x86.exe | grep -qi 'architecture: i386'
+          toolchains/$MINGW/bin/i686-w64-mingw32-objdump -f app/Madeira/i386-windows/hello-x86.exe | grep -qi 'file format pe-i386'
           rm app/Madeira/i386-windows/hello-x86.exe
           echo "Validated i386 Wine farm and 32-bit PE smoke-test fixture."
       - name: "Save: WoW64 i386 DLL farm"
