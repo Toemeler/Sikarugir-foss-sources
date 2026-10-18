@@ -178,6 +178,7 @@ extension GameRecommendations {
         if let mode = rec.display { entry.display = mode == DisplayMode.fit.rawValue ? nil : mode }
         if let factor = rec.metalFXUpscale { entry.metalFXUpscale = factor }
         if let mode = rec.controllerMode { entry.controllerMode = mode }
+        if let count = rec.cpuCount { entry.cpuCount = count }
         // A Steam game whose install folder has the list's program starts it through Madeira Dock.
         if let program = rec.program { entry.takeRecommendedProgram(program) }
         // A game added by hand, still named after its program file (PLAY MADEIRA.exe is
@@ -191,10 +192,11 @@ extension GameRecommendations {
                 entry.steamID = store
             }
         }
-        // The list's program added by hand (a copy Steam did not install): it starts with
-        // Steam running, for the game the entry is linked to (LibraryEntry.dockSteam).
-        if let program = rec.program, entry.steamAppID == nil, entry.steamID != nil,
-           GameRecommendation.sameProgram(file, program) {
+        // The list's program added by hand (a copy Steam did not install), or one of its
+        // other programs (handPrograms): it starts with Steam running, for the game the
+        // entry is linked to (LibraryEntry.dockSteam).
+        if entry.steamAppID == nil, entry.steamID != nil,
+           ([rec.program].compactMap { $0 } + rec.handPrograms).contains(where: { GameRecommendation.sameProgram(file, $0) }) {
             entry.dockSteam = true
         }
     }

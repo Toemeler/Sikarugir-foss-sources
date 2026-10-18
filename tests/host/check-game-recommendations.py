@@ -262,12 +262,23 @@ assert not any(line.startswith(('pso-lazy-libs', 'clear-rects'))
 # swap-file pages; Play -> 30 fps 182 s -> 74 s, 4.5 GB peak), swap-min-mb 8, lean diagnostics, 9 cores,
 # the in-memory 4:3 patch at 800x600, and the owner's portable lines every test ran with.
 assert er['tested'] == ['swap-mb = 6144', 'swap-mode = 2', 'swap-min-mb = 8', 'vram-mb = 1024', 'avail-phys = 1',
-                        'ring-share = 1', 'pso-lazy-libs = 1', 'pso-warm = 2', 'msc-unbounded-retry = 1', 'msc-fail-memo = 1',
-                        'pso-placeholder = 1', 'quiet-log = 1', 'local-write = 1', 'env.MADEIRA_LOCK_ORPHAN = stamped',
-                        'env.MADEIRA_EC_HOOK_TRACE = 0', 'env.MADEIRA_SMC_HOST_PAGE = 1', 'env.MADEIRA_CPU_COUNT = 9',
-                        'env.MADEIRA_FPS_CAP = 30', 'env.MADEIRA_LEAN_DIAG = 1', 'env.MADEIRA_EXE_PATCH = eldenring.exe:744f458b94cc:0:eb',
+                        'ring-share = 1', 'pso-lazy = 1', 'pso-lazy-libs = 1', 'pso-warm = 2', 'msc-unbounded-retry = 1',
+                        'msc-fail-memo = 1', 'pso-placeholder = 1', 'quiet-log = 1', 'ui-scale = 3.44',
+                        'ui-scale-serials = 14,15,16,708,709,710', 'env.MADEIRA_LOCK_ORPHAN = stamped',
+                        'env.MADEIRA_EC_HOOK_TRACE = 0', 'env.MADEIRA_CPU_COUNT = 9', 'env.MADEIRA_FPS_CAP = 30',
+                        'env.MADEIRA_LEAN_DIAG = 1', 'env.MADEIRA_EXE_PATCH = eldenring.exe:744f458b94cc:0:eb',
+                        'env.FEX_EXTENDEDVOLATILEMETADATA = oo2core_6_win64.dll',
                         'env.WINEDLLOVERRIDES = dinput8=n,b;oo2core_6_win64=b', 'env.MADEIRA_OODLE_NATIVE = 1',
-                        'env.MADEIRA_SWAP_ANON_RESV = 1024#1,1024#3'], er['lines']
+                        'env.MADEIRA_SWAP_ANON_RESV = 1024#1,1024#2,1024#3'], er['lines']
+# Version 10 (2026-10-18, owner's request): the owner's "ELDEN RING (Direct, Optimized)" entry, which ran well from
+# drive_c and, unchanged, from the external SSD (D:); its config file's effective lines (the last line of each key it
+# set twice). A new entry made from version 9 did not start, so local-write and the host-page SMC switch are gone.
+old_entry_config = ['pso-lazy-libs = 1', 'quiet-log = 1', 'vram-mb = 1024', 'env.MADEIRA_CPU_COUNT = 9',
+                    'env.WINEDLLOVERRIDES = dinput8=n,b;oo2core_6_win64=b',
+                    'env.MADEIRA_SWAP_ANON_RESV = 1024#1,1024#2,1024#3', 'swap-min-mb = 8']
+assert all(line in er['tested'] for line in old_entry_config), 'the last value of every key the old file set twice'
+assert not any(line.startswith(('local-write', 'env.MADEIRA_SMC_HOST_PAGE')) for line in er['tested']), \
+    'version 10 has neither local-write nor the host-page SMC switch'
 assert (root / 'madeira-oodle' / 'src' / 'oo2core_shim.cpp').is_file(), 'the native Oodle builtin the list names'
 # Version 3: local-write = 1 (the Seamless Co-op launcher's WriteProcessMemory into the game), Elden Ring's only.
 assert not any(line.startswith('local-write') for p in presets.values() if p is not er for line in p['lines']), "local-write is Elden Ring's only"
@@ -282,8 +293,9 @@ assert (root / 'build' / 'fex-arm64ec' / 'patches' / '0001-smc-host-page.patch')
 # bars at 800x600), so a 16:9 monitor filled to the 4:3 iPad has no bars and no distortion.
 # Version 7: owner-confirmed physical controller input through keyboard and mouse.
 # Version 8 (measured on the M4 iPad, builds 40/43): pso-warm = 2, background pipeline compiles.
-assert er['version'] == 9 and er['switches'] == ('wineVCRT: false, fastSync: true, fpsMode: 3, resolution: "800x600", '
-                                                 'display: "fill", metalFXUpscale: 2, controllerMode: "keys", program: "PLAY MADEIRA.exe", storeAppID: 1245620'), er
+assert er['version'] == 10 and er['switches'] == ('wineVCRT: false, fastSync: true, fpsMode: 3, resolution: "800x600", '
+                                                  'display: "fill", metalFXUpscale: 2, controllerMode: "keys", cpuCount: 4, '
+                                                  'program: "PLAY MADEIRA.exe", storeAppID: 1245620, handPrograms: ["eldenring.exe"]'), er
 assert not any('controllerMode:' in p['switches'] for p in presets.values() if p is not er), "other games keep their controller mode"
 assert not any('program:' in p['switches'] for p in presets.values() if p is not er), "a program is Elden Ring's only"
 fields = block(apply_src, '    private static func takeEntryFields(', '\n    }\n')
@@ -444,6 +456,7 @@ struct LibraryEntry {
     var steamID: Int? = nil
     var metalFXUpscale: Double? = nil
     var controllerMode: String? = nil
+    var cpuCount: Int? = nil
     var dockSteam: Bool? = nil
     mutating func takeRecommendedProgram(_ name: String) { recommendedProgram = name }   // SteamGames.swift
 }
@@ -730,6 +743,14 @@ check(GameRecommendation.sameProgram("PLAY_MADEIRA.exe", "PLAY MADEIRA.exe") && 
 var named = LibraryEntry(title: "My Elden Ring", windowsPath: #"C:\ER2\eldenring.exe"#)
 check(R.prepare(&named, new: true) && named.title == "My Elden Ring" && named.steamID == nil && named.dockSteam == nil,
       "a title of the player's own stays; the game's own program does not start with Steam running by itself")
+// Version 10: eldenring.exe added by hand, on C: or the external drive, as on the owner's iPad (2026-10-18).
+var fromD = LibraryEntry(title: "eldenring", windowsPath: #"D:\ELDEN RING\eldenring.exe"#)
+check(id(fromD.windowsPath) == "elden-ring" && R.prepare(&fromD, new: true) && fromD.title == "Elden Ring"
+      && fromD.steamID == 1245620 && fromD.dockSteam == true && fromD.cpuCount == 4 && fromD.fpsMode == 3
+      && fromD.resolution == "800x600" && fromD.display == "fill" && fromD.controllerMode == "keys",
+      "eldenring.exe added by hand from D: takes the whole list and starts with Steam running")
+var fromC = LibraryEntry(title: "eldenring", windowsPath: #"C:\ELDEN RING\eldenring.exe"#)
+check(R.prepare(&fromC, new: true) && fromC.dockSteam == true && fromC.cpuCount == 4, "the same from C:")
 print("PASS: drive_c is looked up for a program's list; a new entry takes the fields of a list written for its path before")
 '''
 

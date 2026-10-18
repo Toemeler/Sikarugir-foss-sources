@@ -73,6 +73,8 @@ struct GameRecommendation: Equatable {
     /// LibraryEntry.controllerMode: "keys" routes a physical pad as keyboard and mouse.
     /// nil leaves the player's controller choice alone.
     var controllerMode: String? = nil
+    /// LibraryEntry.cpuCount: processors reported to the game (MADEIRA_CPU_COUNT); nil leaves it.
+    var cpuCount: Int? = nil
     /// A Steam game's program by file name ("PLAY MADEIRA.exe"): when its install
     /// folder has one, Madeira Dock starts it with Valve's client running for it,
     /// as if picked in Game details › Steam › Program. Without one, nothing changes.
@@ -82,6 +84,9 @@ struct GameRecommendation: Equatable {
     /// artwork (LibraryEntry.steamID, as Game details › Find on Steam sets it). A game
     /// added by hand whose program is `program` starts with Steam running, for this app.
     var storeAppID: Int? = nil
+    /// Other programs of the game that start with Steam running when added by hand,
+    /// as `program` does ("eldenring.exe": the game's own program, on C: or the external drive).
+    var handPrograms: [String] = []
 
     /// Whether two program file names are the same program: case and "_" for " " do not
     /// matter ("PLAY_MADEIRA.exe" is "PLAY MADEIRA.exe").
@@ -108,6 +113,7 @@ struct GameRecommendation: Equatable {
         if let resolution { parts.append(resolution == Self.screen720 ? "this screen's shape at 720 lines" : resolution) }
         if let metalFXUpscale { parts.append("MetalFX \(metalFXUpscale == 2 ? "2" : String(metalFXUpscale))x") }
         if controllerMode == "keys" { parts.append("controller as keyboard and mouse") }
+        if let cpuCount { parts.append("\(cpuCount) processors") }
         if let program { parts.append("starts \(program)") }
         return parts.joined(separator: ", ")
     }
@@ -608,8 +614,17 @@ enum GameRecommendations {
     /// byte only when its pattern occurs exactly once; the game's files are not touched), so the 3D
     /// fills a 4:3 iPad without bars; the owner's portable lines (ring-share, a 1 GB video memory
     /// budget, the 30 fps frame cap, dinput8 for the YAFSML mod loader) are the ones every test ran with.
+    /// Version 10 (2026-10-18, the owner's request): the owner's "ELDEN RING (Direct, Optimized)"
+    /// entry, which ran the game well from drive_c through 2026-10-17 and, copied unchanged, from an
+    /// external SSD (D:, exFAT, build 57) on 2026-10-18; a new entry made from version 9 did not start.
+    /// Its config file had keys set twice; this is what it set (the last line of each key): version 9
+    /// plus pso-lazy, the FEX volatile-metadata relaxation for oo2core_6_win64.dll, the game's 2nd
+    /// 1 GB heap out of the swap file too (test 12: the teleport freeze was ~23k swap-file faults/s
+    /// in it), the UI at the iPad's resolution (ui-scale 3.44, with the UI textures by serial,
+    /// test 14), without local-write and the host-page SMC switch, which it never had. The entry
+    /// reported 4 processors; eldenring.exe added by hand starts with Steam running, as it did.
     static let eldenRing = GameRecommendation(
-        id: "elden-ring", title: "Elden Ring", version: 9,
+        id: "elden-ring", title: "Elden Ring", version: 10,
         config: """
         # Madeira's recommended settings for Elden Ring (an 8 GB iPad; measured on the iPad Pro M4 13").
         # Reset to Recommended, at the bottom of the game's settings, brings them back.
@@ -619,26 +634,29 @@ enum GameRecommendations {
         vram-mb = 1024
         avail-phys = 1
         ring-share = 1
+        pso-lazy = 1
         pso-lazy-libs = 1
         pso-warm = 2
         msc-unbounded-retry = 1
         msc-fail-memo = 1
         pso-placeholder = 1
         quiet-log = 1
-        local-write = 1
+        ui-scale = 3.44
+        ui-scale-serials = 14,15,16,708,709,710
         env.MADEIRA_LOCK_ORPHAN = stamped
         env.MADEIRA_EC_HOOK_TRACE = 0
-        env.MADEIRA_SMC_HOST_PAGE = 1
         env.MADEIRA_CPU_COUNT = 9
         env.MADEIRA_FPS_CAP = 30
         env.MADEIRA_LEAN_DIAG = 1
         env.MADEIRA_EXE_PATCH = eldenring.exe:744f458b94cc:0:eb
+        env.FEX_EXTENDEDVOLATILEMETADATA = oo2core_6_win64.dll
         env.WINEDLLOVERRIDES = dinput8=n,b;oo2core_6_win64=b
         env.MADEIRA_OODLE_NATIVE = 1
-        env.MADEIRA_SWAP_ANON_RESV = 1024#1,1024#3
+        env.MADEIRA_SWAP_ANON_RESV = 1024#1,1024#2,1024#3
         """,
         wineVCRT: false, fastSync: true, fpsMode: 3, resolution: "800x600", display: "fill",
-        metalFXUpscale: 2, controllerMode: "keys", program: "PLAY MADEIRA.exe", storeAppID: 1245620)
+        metalFXUpscale: 2, controllerMode: "keys", cpuCount: 4, program: "PLAY MADEIRA.exe",
+        storeAppID: 1245620, handPrograms: ["eldenring.exe"])
 
     /// Raft (Unity, Direct3D 11 through DXMT) for an 8 GB iPad Pro M4 (owner's
     /// request, 2026-10-15). Not device-tested yet: every line is one the owner
