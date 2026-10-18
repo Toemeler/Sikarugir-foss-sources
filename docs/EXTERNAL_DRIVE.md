@@ -9,10 +9,11 @@ iPad: nothing Madeira writes goes to the drive.
 
 1. Format the drive in the Files app (long-press it under Locations › Erase),
    as **APFS** or **ExFAT**. Skip this if it already has one of them.
-2. In Files, copy the game's whole folder to the drive (for example
-   *On My iPad › Madeira › wine › drive_c › ELDEN RING* to *SSD › Games*).
-3. In Madeira: **Settings › External drive › Choose Folder…**, and pick the
-   folder on the drive that holds the games (*SSD › Games*). Settings then shows
+2. In Files, make a folder on the drive (*SSD › Games*) and copy the game's
+   whole folder into it (for example *On My iPad › Madeira › wine › drive_c ›
+   ELDEN RING* to *SSD › Games*).
+3. In Madeira: **Settings › External drive › Choose Folder…**, open the folder
+   that holds the games (*SSD › Games*) and tap **Open**. Settings then shows
    the folder, its file system and free space.
 4. In the library, tap **+**. At the top of drive_c's list is **External drive
    (D:)**; open it and choose the game's `.exe`. The new entry starts
@@ -35,6 +36,16 @@ and, for a game Madeira knows (Elden Ring), its recommended settings, which are
 applied on first sight as for any new entry.
 
 ## How it works
+
+- The folder picker is `app/Madeira/FolderPicker.m`, not SwiftUI's `fileImporter`.
+  Inside LiveContainer, its TweakLoader swaps every document picker's types for
+  "any item + folder", so a folder picker can open files and enter folders but
+  never choose one (build 56 on the iPad: Open did nothing, by pointer or touch).
+  The hook is installed by exchanging implementations, so FolderPicker.m calls
+  UIKit's original initializer through the hook's selector, for folders only and
+  in place (not a copy), when that implementation lies in UIKit; otherwise the
+  ordinary initializer. The drive's top level could not be chosen either; choose
+  a folder on the drive (for example *Games*) and keep the games in it.
 
 - `app/Madeira/ExternalDrive.swift`: the folder picker's URL is accessed and a
   full (not minimal) bookmark is stored in

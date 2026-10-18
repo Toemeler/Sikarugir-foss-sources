@@ -547,9 +547,23 @@ check('if activeEntry?.drive != nil, pollTicks % 4 == 0, let lost = ExternalDriv
 finish = body_of(model, '    private func finish() {')
 check('if let lost = driveLost { error = error.map { lost + "\\n\\n" + $0 } ?? lost }' in finish and 'driveLost = nil' in finish,
       "the session's end says the drive was disconnected")
-check('ExternalDriveSettings()' in library and 'struct ExternalDriveSettings: View' in library and
-      '.fileImporter(isPresented: $importing, allowedContentTypes: [.folder])' in body_of(library, 'struct ExternalDriveSettings: View {'),
-      'Settings › External drive picks a folder')
+settings_view = body_of(library, 'struct ExternalDriveSettings: View {')
+check('ExternalDriveSettings()' in library and '.sheet(isPresented: $importing) {' in settings_view and
+      'ExternalFolderPicker { picked in' in settings_view and '.fileImporter(' not in settings_view,
+      "Settings › External drive picks a folder with Madeira's own picker, not SwiftUI's fileImporter")
+# Build 56 on the iPad: inside LiveContainer, fileImporter's folder picker could not choose a folder
+# (Open did nothing), because LiveContainer's TweakLoader swaps the picker's types for item + folder.
+picker_m = (root / 'app/Madeira/FolderPicker.m').read_text(encoding='utf-8')
+check('NSSelectorFromString(@"hook_initForOpeningContentTypes:asCopy:")' in picker_m and
+      'strstr(info.dli_fname, "/UIKitCore.framework/")' in picker_m and
+      'NSArray<UTType *> *types = @[UTTypeFolder];' in picker_m and
+      picker_m.count('asCopy:NO') + picker_m.count('types, NO)') == 2 and
+      '__attribute__((ns_consumed)) id' in picker_m and '__attribute__((ns_returns_retained))' in picker_m,
+      "the picker calls UIKit's own initializer behind LiveContainer's exchanged hook (folders only, in place), "
+      'only when that implementation is in UIKit, with ARC initializer semantics; the plain one otherwise')
+check('#import "FolderPicker.h"' in (root / 'app/Madeira/Madeira-Bridging-Header.h').read_text(encoding='utf-8') and
+      project.count('FolderPicker.m in Sources') == 2 and 'madeira_folder_picker(context.coordinator)' in library,
+      'FolderPicker.m is in the app target and bridged to Swift')
 start = body_of(content, '    private func startLibraryEntry(_ entry: LibraryEntry) {')
 check(start.index('LibraryModel.executable(entry.launchRelativePath, drive: entry.drive)') < start.index('try entry.validate()') <
       start.index('runWineFullSequence(profile: entry)'), "the launch's preflight resolves the drive first")

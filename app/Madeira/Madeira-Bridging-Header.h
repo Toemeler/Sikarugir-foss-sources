@@ -11,6 +11,8 @@
 #import "SwiftSteam/lzma_shim.h"
 // On-device remote pairing for Built-in StikJIT (build/rppairing-ios, JITPairing.swift).
 #import "MadeiraRPPairing.h"
+// Settings › External drive: a folder picker LiveContainer's picker hook cannot break (FolderPicker.m).
+#import "FolderPicker.h"
 // madeira-bcd: the bundled prefix template, read by the Dock's Reset (DockReset.swift).
 #include "PrefixExtractor.h"
 
