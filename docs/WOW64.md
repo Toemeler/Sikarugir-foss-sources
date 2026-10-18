@@ -300,6 +300,11 @@ none are committed with the code.
 
 `app/Madeira/i386-windows/` is a folder reference in the Xcode project; it is
 tracked empty (`.gitkeep`) so the project builds before step 1 has run.
+The GitHub Actions release workflow builds this farm from the pinned Wine and
+DXMT submodules before Xcode packages the app, verifies its import closure and
+required DLLs, and checks that the resulting IPA contains the i386 resources.
+Manual branch builds upload the IPA as a run artifact without publishing a
+release unless `publish_release` is explicitly enabled.
 
 ## 10. Merge order
 

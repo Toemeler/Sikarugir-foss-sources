@@ -3,10 +3,9 @@
 # app/Madeira/i386-windows/.
 #
 # This is the macOS form of the WSL stage script the 32-bit work was built
-# with. It follows the conventions of build/wine-pe/build-ntdll.sh (the
-# llvm-mingw toolchain under toolchains/, a separate wine/build-<arch> tree) and
-# has NOT been run on macOS yet: the logic is the WSL script's, the paths and
-# tool invocations are translated. See docs/WOW64.md, "Building".
+# with. It follows build/wine-pe/build-ntdll.sh (the llvm-mingw toolchain under
+# toolchains/, a separate wine/build-<arch> tree). The full farm was validated
+# on macOS on 2026-09-29; see docs/WOW64.md, "Building".
 #
 #   build/wine-i386/build.sh                 whole farm + DXMT's i386 DLLs
 #   build/wine-i386/build.sh kernel32 user32 only those Wine modules

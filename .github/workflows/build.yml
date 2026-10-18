@@ -3,13 +3,14 @@
 # can be installed and updated from inside the sideloader.
 #
 # Pushing to the default branch releases as build-N; pushing a v* tag releases
-# under that tag.
+# under that tag. A manual branch run uploads an IPA artifact only by default;
+# set publish_release to also publish a release and update the source feed.
 #
 # Three jobs: LLVM for iOS (hours, so built once and cached), the app (every
-# native library docs/BUILDING.md lists, then Xcode), and the Pages site. The
-# Windows-side DLLs are committed in app/Madeira/*-windows. The native D3D12
-# runtime is rebuilt from source, as is the x64 emulator xtajit64.dll (from the
-# pinned FEX plus build/fex-arm64ec/patches).
+# native libraries, then Xcode), and the Pages site. The ARM64 Windows DLL
+# farms are committed; the i386 WoW64 DLL farm is built from pinned Wine and
+# DXMT sources and bundled in the IPA. The native D3D12 runtime and x64
+# emulator xtajit64.dll are also rebuilt from source.
 
 name: Build
 
@@ -21,6 +22,10 @@ on:
     inputs:
       force_build:
         description: "Rebuild even when the app did not change"
+        type: boolean
+        default: false
+      publish_release:
+        description: "Publish a GitHub Release and update the SideStore feed (leave off for branch builds)"
         type: boolean
         default: false
 
@@ -98,7 +103,7 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 180
     outputs:
-      published: ${{ steps.appcheck.outputs.skip != 'true' }}
+      published: ${{ steps.appcheck.outputs.skip != 'true' && steps.publication.outputs.publish == 'true' }}
 
     steps:
       - uses: actions/checkout@v4
@@ -150,6 +155,18 @@ jobs:
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Decide whether to publish a release
+        if: steps.appcheck.outputs.skip != 'true'
+        id: publication
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.publish_release }}" != "true" ]; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "Branch build: the IPA will be a run artifact, with no release or feed update."
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            echo "Release build: publish the IPA and update the source feed."
+          fi
+
       # ------------------------------------------------------------- caches
       # Every native library is cached under a key made from exactly what goes
       # into it: its build scripts, the pinned submodule commit and the keys of
@@ -179,6 +196,7 @@ jobs:
             "$(git hash-object .github/scripts/configure_wine.sh)" "$GNUTLS" "$FFMPEG" "$FREETYPE")"
           DXMT="dxmt-$V-$(k "$(t dxmt)" "$(t build/dxmt-ios)" "$(t build/madeira-d3d12)" \
             "$(t build/madeira_cfg.h)" "$(t madeira-d3d12)" "$(t app/Madeira/d3d12)" "$LLVM_KEY")"
+          WOW64="wow64-$V-$(k "$(t wine)" "$(t dxmt)" "$(t build/wine-i386)" "$MINGW")"
           PAIRING="pairing-$V-$(k "$(t build/rppairing-ios)")"
           DOCK="dock-$V-$(k "$(t madeira-dock)" "$(t build/madeira-dock)" "$MINGW")"
           FEXEC="fexec-$V-$(k "$(t FEX)" "$(t build/fex-arm64ec)" "$MINGW")"
@@ -186,6 +204,7 @@ jobs:
           {
             echo "gnutls=$GNUTLS"; echo "ffmpeg=$FFMPEG"; echo "freetype=$FREETYPE"
             echo "fex=$FEX"; echo "wine=$WINE"; echo "dxmt=$DXMT"
+            echo "wow64=$WOW64"
             echo "pairing=$PAIRING"; echo "dock=$DOCK"; echo "vcrt=$VCRT"
             echo "fexec=$FEXEC"
             echo "llvm=$LLVM_KEY"
@@ -257,6 +276,14 @@ jobs:
           key: ${{ steps.keys.outputs.dxmt }}
           path: app/Madeira/libdxmt_combined.a
 
+      - name: "Cache: WoW64 i386 DLL farm"
+        if: steps.appcheck.outputs.skip != 'true'
+        id: c-wow64
+        uses: actions/cache/restore@v4
+        with:
+          key: ${{ steps.keys.outputs.wow64 }}
+          path: app/Madeira/i386-windows
+
       - name: "Cache: in-app pairing"
         if: steps.appcheck.outputs.skip != 'true'
         id: c-pairing
@@ -308,13 +335,15 @@ jobs:
         env:
           NEED_WINE: ${{ steps.c-wine.outputs.cache-hit != 'true' }}
           NEED_DXMT: ${{ steps.c-dxmt.outputs.cache-hit != 'true' }}
+          NEED_WOW64: ${{ steps.c-wow64.outputs.cache-hit != 'true' }}
           NEED_DOCK: ${{ steps.c-dock.outputs.cache-hit != 'true' }}
         run: |
           set -euo pipefail
-          # Only when their library has to be built; wine alone is large.
+          # Only when their native library or the WoW64 farm has to be built;
+          # Wine alone is large.
           MODS=()
-          [ "$NEED_WINE" = true ] && MODS+=(wine)
-          [ "$NEED_DXMT" = true ] && MODS+=(dxmt)
+          if [ "$NEED_WINE" = true ] || [ "$NEED_WOW64" = true ]; then MODS+=(wine); fi
+          if [ "$NEED_DXMT" = true ] || [ "$NEED_WOW64" = true ]; then MODS+=(dxmt); fi
           # madeira-dock is part of this repository: nothing to fetch for it ($NEED_DOCK).
           if [ ${#MODS[@]} -gt 0 ]; then
             echo "fetching: ${MODS[*]}"
@@ -348,6 +377,7 @@ jobs:
           NEED_FEXEC: ${{ steps.c-fexec.outputs.cache-hit != 'true' }}
           NEED_PAIRING: ${{ steps.c-pairing.outputs.cache-hit != 'true' }}
           NEED_VCRT: ${{ steps.c-vcrt.outputs.cache-hit != 'true' }}
+          NEED_WOW64: ${{ steps.c-wow64.outputs.cache-hit != 'true' }}
         run: |
           set -euo pipefail
           # Only what the builds that are not cached need.
@@ -355,6 +385,7 @@ jobs:
           # bison/flex for Wine's configure (macOS ships bison 2.3), gnutls and
           # freetype so that configure enables the modules that use them.
           [ "$NEED_WINE" = true ] && PKGS+=(bison flex gnutls freetype pkgconf)
+          [ "$NEED_WOW64" = true ] && PKGS+=(bison flex meson)
           [ "$NEED_VCRT" = true ] && PKGS+=(sevenzip)
           [ ${#PKGS[@]} -eq 0 ] || brew install "${PKGS[@]}"
 
@@ -371,6 +402,9 @@ jobs:
           # Metal compiler as a separate component.
           xcrun -sdk macosx metal --version >/dev/null 2>&1 || xcodebuild -downloadComponent MetalToolchain
           xcrun -sdk macosx metal --version
+          if [ "$NEED_WOW64" = true ]; then
+            command -v ninja >/dev/null || brew install ninja
+          fi
 
           # The D3D12 PE runtime is rebuilt for every release, including runs
           # whose Wine, Dock and FEX native libraries were all cached.
@@ -491,6 +525,44 @@ jobs:
         with:
           key: ${{ steps.keys.outputs.dxmt }}
           path: app/Madeira/libdxmt_combined.a
+
+      # The i386 PE farm is a folder resource in the app bundle. Build it from
+      # the pinned Wine and DXMT submodules when the source-keyed cache misses;
+      # the Xcode build below then embeds it in the IPA.
+      - name: WoW64 i386 farm (Wine + DXMT)
+        if: steps.appcheck.outputs.skip != 'true' && steps.c-wow64.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          build/wine-i386/build.sh 2>&1 | tee wow64-build.log
+          test -s app/Madeira/i386-windows/ntdll.dll
+          test -s app/Madeira/i386-windows/kernel32.dll
+          test -s app/Madeira/i386-windows/user32.dll
+          test -s app/Madeira/i386-windows/comctl32.dll
+          grep -Eq '^== [0-9]+ files in app/Madeira/i386-windows, 0 missing imports ==$' wow64-build.log
+          tests/x86/build.sh hello-x86
+          toolchains/$MINGW/bin/i686-w64-mingw32-objdump -f app/Madeira/i386-windows/hello-x86.exe | grep -qi 'architecture: i386'
+          rm app/Madeira/i386-windows/hello-x86.exe
+          echo "Validated i386 Wine farm and 32-bit PE smoke-test fixture."
+      - name: "Save: WoW64 i386 DLL farm"
+        if: steps.appcheck.outputs.skip != 'true' && steps.c-wow64.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          key: ${{ steps.keys.outputs.wow64 }}
+          path: app/Madeira/i386-windows
+
+      - name: Verify bundled WoW64 runtime
+        if: steps.appcheck.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          for dll in ntdll.dll kernel32.dll user32.dll comctl32.dll; do
+            test -s "app/Madeira/i386-windows/$dll" || { echo "Missing WoW64 builtin: $dll"; exit 1; }
+          done
+          for dll in ntdll.dll wow64.dll wow64win.dll xtajit.dll; do
+            test -s "app/Madeira/aarch64-windows/$dll" || { echo "Missing ARM64 WoW64 support: $dll"; exit 1; }
+          done
+          count=$(find app/Madeira/i386-windows -maxdepth 1 -type f -name '*.dll' | wc -l | tr -d ' ')
+          echo "WoW64 DLL farm contains $count DLLs."
+          test "$count" -ge 100
 
       - name: D3D12 runtime (ARM64EC)
         if: steps.appcheck.outputs.skip != 'true'
@@ -617,8 +689,37 @@ jobs:
           echo "sha256=$(shasum -a 256 Madeira.ipa | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
           echo "human_size=$(ls -lh Madeira.ipa | awk '{print $5}')" >> "$GITHUB_OUTPUT"
 
-      - name: Determine release tag
+      - name: Verify WoW64 runtime is in the IPA
         if: steps.appcheck.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import zipfile
+          ipa = "Madeira.ipa"
+          required = {
+              "ntdll.dll", "kernel32.dll", "user32.dll", "comctl32.dll",
+              "comdlg32.dll", "shell32.dll", "userenv.dll",
+          }
+          with zipfile.ZipFile(ipa) as z:
+              names = set(z.namelist())
+          prefix = "Payload/Madeira.app/i386-windows/"
+          bundled = {name[len(prefix):].lower() for name in names if name.startswith(prefix)}
+          missing = sorted(required - bundled)
+          if missing:
+              raise SystemExit("IPA is missing WoW64 resources: " + ", ".join(missing))
+          dlls = [name for name in bundled if name.endswith(".dll")]
+          if len(dlls) < 100:
+              raise SystemExit(f"IPA contains only {len(dlls)} i386 DLLs")
+          arm64_prefix = "Payload/Madeira.app/aarch64-windows/"
+          arm64 = {name[len(arm64_prefix):].lower() for name in names if name.startswith(arm64_prefix)}
+          missing_arm64 = sorted({"ntdll.dll", "wow64.dll", "wow64win.dll", "xtajit.dll"} - arm64)
+          if missing_arm64:
+              raise SystemExit("IPA is missing ARM64 WoW64 support: " + ", ".join(missing_arm64))
+          print(f"Verified {len(dlls)} i386 DLLs in {ipa}")
+          PY
+
+      - name: Determine release tag
+        if: steps.appcheck.outputs.skip != 'true' && steps.publication.outputs.publish == 'true'
         id: tag
         run: |
           if [ "${{ github.ref_type }}" = "tag" ]; then
@@ -629,11 +730,11 @@ jobs:
             echo "title=Madeira build #${{ github.run_number }}" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Upload IPA as run artifact (non-fatal, short retention)
+      - name: Upload IPA as run artifact
         if: steps.appcheck.outputs.skip != 'true'
-        # The account-wide artifact quota must never kill a finished build - the
-        # GitHub Release below is the real distribution channel.
-        continue-on-error: true
+        # Branch builds need this artifact; for releases the GitHub Release is
+        # the durable distribution channel, so an artifact quota must not fail it.
+        continue-on-error: ${{ steps.publication.outputs.publish == 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: Madeira-ipa
@@ -642,7 +743,7 @@ jobs:
           retention-days: 7
 
       - name: Build the SideStore source feed
-        if: steps.appcheck.outputs.skip != 'true'
+        if: steps.appcheck.outputs.skip != 'true' && steps.publication.outputs.publish == 'true'
         id: feed
         env:
           VERSION: ${{ steps.version.outputs.version }}
@@ -685,7 +786,7 @@ jobs:
           python3 .github/scripts/make_source.py .
 
       - name: Publish the release
-        if: steps.appcheck.outputs.skip != 'true'
+        if: steps.appcheck.outputs.skip != 'true' && steps.publication.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.tag.outputs.tag }}
@@ -730,7 +831,7 @@ jobs:
           fi
 
       - name: Commit the source feed
-        if: steps.appcheck.outputs.skip != 'true'
+        if: steps.appcheck.outputs.skip != 'true' && steps.publication.outputs.publish == 'true'
         # Committed rather than deployed with actions/deploy-pages: the Actions
         # token may not create the Pages site itself. This makes the feed
         # reachable over raw.githubusercontent.com immediately, and over Pages
@@ -748,7 +849,7 @@ jobs:
             s.json apps.json icon.png stikdebug-icon.png index.html .build-stamp
 
       - name: Stage the Pages site
-        if: steps.appcheck.outputs.skip != 'true'
+        if: steps.appcheck.outputs.skip != 'true' && steps.publication.outputs.publish == 'true'
         run: |
           set -euo pipefail
           mkdir -p _site
@@ -757,7 +858,7 @@ jobs:
           ls -l _site
 
       - name: Hand the site to the Pages job
-        if: steps.appcheck.outputs.skip != 'true'
+        if: steps.appcheck.outputs.skip != 'true' && steps.publication.outputs.publish == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: madeira-pages
