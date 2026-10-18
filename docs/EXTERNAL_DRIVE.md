@@ -35,6 +35,31 @@ its game config (`Application Support/GameConfigs/<hash of its Windows path>.cfg
 and, for a game Madeira knows (Elden Ring), its recommended settings, which are
 applied on first sight as for any new entry.
 
+## Steam downloads
+
+While the drive is connected, a game downloaded in Madeira (Steam › Not installed)
+goes into a Steam library on the drive, *SteamLibrary* in the chosen folder;
+without the drive, downloads go to the iPad as before. An update or a repair
+stays in the library the game is in. Valve's client knows the drive's library
+from its `libraryfolders.vdf`, and Madeira Dock starts those games as any
+other. They are listed while the drive is connected.
+
+The library is reached from Windows as `C:\ExternalDrive\SteamLibrary`, through
+a link Madeira keeps in drive_c to the chosen folder (`drive_c/ExternalDrive`,
+removed while the drive is away), so every path Madeira, Madeira Dock and Valve's
+client use for these games stays a drive_c path (`SteamInstallPaths.externalRelative`,
+`SteamLibraryFolders` in SteamInstall.swift). The same folder is D: as well.
+
+## Elden Ring
+
+Madeira's recommended settings for Elden Ring (version 10) are the setup that
+runs it from the drive: added from D: (or C:) as `eldenring.exe`, the entry gets
+them on first sight, including the start with Steam running. On a new iPad:
+install Madeira, sign in to Steam, set up Madeira Dock, choose the drive's
+folder in Settings › External drive, and add `D:\ELDEN RING\eldenring.exe` with
+**+**. Inside LiveContainer, turn on LiveContainer › Madeira › *Fix File Picker*
+(not the Legacy one) first, or the folder cannot be chosen.
+
 ## How it works
 
 - The folder picker is `app/Madeira/FolderPicker.m`, not SwiftUI's `fileImporter`.

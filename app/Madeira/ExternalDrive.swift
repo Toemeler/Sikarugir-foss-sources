@@ -234,6 +234,12 @@ final class ExternalDrive {
 
     /// Application Support/ExternalDrive (the host check gives it a folder of its own).
     var store: ExternalDriveStore? = ExternalDriveStore.standard
+    /// The Wine prefix (Documents/wine); the host check gives it a folder of its own.
+    var prefixPath: String = (FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first?
+        .appendingPathComponent("wine").path) ?? ""
+    /// drive_c's link to the chosen folder, C:\ExternalDrive: Steam downloads on the
+    /// drive keep drive_c paths through it (SteamInstallPaths.externalRelative).
+    static let driveCLinkName = "ExternalDrive"
     /// Settings: the drive letter Windows programs see the folder as.
     var letter: String { ExternalDriveRules.letter(MadeiraConfig.get("external-drive-letter")) }
     var record: ExternalDriveRecord? { store?.load() }
@@ -252,9 +258,11 @@ final class ExternalDrive {
             folder = url; self.scoped = scoped; reportedLoss = false
             LogStore.shared.log("[external-drive] \(letter.uppercased()): folder \(url.path) scoped=\(scoped ? 1 : 0)" +
                                 (refreshed ? " (stale bookmark made again)" : ""))
+            setDriveCLink(target: url.path)
             return .success(url)
         case .failed(let failure):
             LogStore.shared.log("[external-drive] \(letter.uppercased()): \(failure)", level: .error)
+            setDriveCLink(target: nil)
             return .failure(failure)
         }
     }
@@ -263,6 +271,60 @@ final class ExternalDrive {
     /// (LibraryModel.drive is resolved the same way).
     func root() -> Result<URL, ExternalDriveRules.Failure> {
         prepare().map { $0.resolvingSymlinksInPath().standardizedFileURL }
+    }
+
+    /// The folder this run holds, resolved as root() is, without resolving the bookmark
+    /// again (library scans ask often; nil until a start, Settings or a download prepared it).
+    var connectedRoot: String? {
+        lock.lock(); defer { lock.unlock() }
+        guard let folder, FileManager.default.fileExists(atPath: folder.path) else { return nil }
+        return folder.resolvingSymlinksInPath().standardizedFileURL.path
+    }
+
+    /// drive_c/ExternalDrive names the folder while it is connected and is removed
+    /// otherwise; anything at that name that is not a link is left alone. Only in a
+    /// prefix that exists.
+    private func setDriveCLink(target: String?) {
+        let driveC = (prefixPath as NSString).appendingPathComponent("drive_c")
+        let fm = FileManager.default
+        var isFolder: ObjCBool = false
+        guard !prefixPath.isEmpty, fm.fileExists(atPath: driveC, isDirectory: &isFolder), isFolder.boolValue else { return }
+        let path = (driveC as NSString).appendingPathComponent(Self.driveCLinkName)
+        let state: ExternalDriveRules.LinkState
+        if let current = try? fm.destinationOfSymbolicLink(atPath: path) { state = .link(current) }
+        else if (try? fm.attributesOfItem(atPath: path)) != nil { state = .other }
+        else { state = .missing }
+        switch ExternalDriveRules.linkPlan(state, target: target) {
+        case .keep: break
+        case .make, .replace:
+            try? fm.removeItem(atPath: path)
+            if let target { try? fm.createSymbolicLink(atPath: path, withDestinationPath: target) }
+        case .remove: try? fm.removeItem(atPath: path)
+        case .leave: LogStore.shared.log("[external-drive] drive_c/\(Self.driveCLinkName) is not a link; left as it is", level: .error)
+        }
+    }
+
+    /// Where Madeira's Steam downloads go while the drive is connected
+    /// (SteamOwnedLibrary): the library folder on it relative to drive_c
+    /// (SteamInstallPaths.externalRelative), made and registered with Valve's client
+    /// on first use. nil without a connected folder, so downloads stay on the iPad.
+    func steamLibrary() -> String? {
+        guard record != nil, case .success(let folder) = prepare() else { return nil }
+        let driveC = URL(fileURLWithPath: prefixPath).appendingPathComponent("drive_c", isDirectory: true)
+        let fm = FileManager.default
+        guard (try? fm.destinationOfSymbolicLink(atPath: driveC.appendingPathComponent(Self.driveCLinkName).path)) != nil else { return nil }
+        let library = folder.appendingPathComponent("SteamLibrary", isDirectory: true)
+        do {
+            try fm.createDirectory(at: library.appendingPathComponent("steamapps/common", isDirectory: true), withIntermediateDirectories: true)
+        } catch {
+            LogStore.shared.log("[external-drive] Steam library could not be made: \(error.localizedDescription)", level: .error)
+            return nil
+        }
+        if SteamLibraryFolders.register(SteamInstallPaths.externalWindowsRoot, libraryRoot: library,
+                                        steamApps: SteamInstallPaths.steamApps(drive: driveC)) {
+            LogStore.shared.log("[external-drive] Steam library \(SteamInstallPaths.externalWindowsRoot) added to Steam's library folders")
+        }
+        return SteamInstallPaths.externalRelative
     }
 
     /// D:\a\b -> the folder's a/b while it answers; nil for another letter
@@ -288,6 +350,7 @@ final class ExternalDrive {
         lock.lock(); defer { lock.unlock() }
         releaseLocked()
         folder = picked; self.scoped = scoped; reportedLoss = false
+        setDriveCLink(target: picked.path)
         LogStore.shared.log("[external-drive] chose \(picked.path) scoped=\(scoped ? 1 : 0)")
     }
 
@@ -297,6 +360,7 @@ final class ExternalDrive {
         lock.lock(); defer { lock.unlock() }
         releaseLocked()
         store?.forget()
+        setDriveCLink(target: nil)
         LogStore.shared.log("[external-drive] forgot the folder")
     }
 
@@ -315,6 +379,17 @@ final class ExternalDrive {
         let letter = self.letter
         var target: String?
         if record != nil, case .success(let url) = prepare() { target = url.path }
+        if prefix == prefixPath {
+            setDriveCLink(target: target)
+            // Steam games downloaded to the drive: Valve's client finds them only through its
+            // library list, which it may have rewritten while the drive was away.
+            if let target, FileManager.default.fileExists(atPath: target + "/SteamLibrary/steamapps") {
+                let driveC = URL(fileURLWithPath: prefix).appendingPathComponent("drive_c", isDirectory: true)
+                SteamLibraryFolders.register(SteamInstallPaths.externalWindowsRoot,
+                                             libraryRoot: URL(fileURLWithPath: target).appendingPathComponent("SteamLibrary", isDirectory: true),
+                                             steamApps: SteamInstallPaths.steamApps(drive: driveC))
+            }
+        }
         let dosdevices = (prefix as NSString).appendingPathComponent("dosdevices")
         let fm = FileManager.default
         try? fm.createDirectory(atPath: dosdevices, withIntermediateDirectories: true)

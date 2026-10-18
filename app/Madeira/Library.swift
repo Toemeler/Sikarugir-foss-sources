@@ -714,6 +714,10 @@ final class LibraryModel: ObservableObject {
     private init() {
         refreshFlag()
         LibraryEntry.externalHostPath = { ExternalDrive.shared.hostPath(ofWindowsPath: $0) }
+        // Steam games downloaded to the external drive are listed while it is connected
+        // (MadeiraDock.games); the folder is resolved once now so they show from the start.
+        MadeiraDock.externalRoot = { ExternalDrive.shared.connectedRoot }
+        if ExternalDrive.shared.record != nil { _ = ExternalDrive.shared.prepare() }
         if FileManager.default.fileExists(atPath: file.path) {
             do {
                 let doc = try JSONDecoder().decode(Document.self, from: Data(contentsOf: file))
@@ -919,7 +923,11 @@ final class LibraryModel: ObservableObject {
             }
         }
         let url = root.appendingPathComponent(relative).resolvingSymlinksInPath().standardizedFileURL
-        guard url.path.hasPrefix(root.path + "/"), programExtensions.contains(url.pathExtension.lowercased()),
+        // A Steam game downloaded to the external drive lives under C:\ExternalDrive, a link
+        // to the drive's folder (SteamInstallPaths.externalRelative): its files resolve there.
+        let throughLink = letter == nil && relative.lowercased().hasPrefix(ExternalDrive.driveCLinkName.lowercased() + "/")
+            && ExternalDrive.shared.connectedRoot.map { url.path.hasPrefix($0 + "/") } == true
+        guard url.path.hasPrefix(root.path + "/") || throughLink, programExtensions.contains(url.pathExtension.lowercased()),
               FileManager.default.fileExists(atPath: url.path) else {
             if let letter {
                 throw LibraryError.message("\(ExternalDriveRules.windowsPath(letter: letter, relative: relative)) is not in the external folder. Check the folder chosen in Settings › External drive.")

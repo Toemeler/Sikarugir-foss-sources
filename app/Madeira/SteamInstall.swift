@@ -22,10 +22,79 @@ enum SteamInstallPaths {
     static func steamApps(drive: URL) -> URL { drive.appendingPathComponent(libraryRelative, isDirectory: true) }
     static func common(drive: URL) -> URL { steamApps(drive: drive).appendingPathComponent("common", isDirectory: true) }
 
-    /// Whether an install (its drive-relative library folder) is in the library
+    /// Downloads made while an external drive is connected (ExternalDrive.swift,
+    /// docs/EXTERNAL_DRIVE.md) go into a Steam library on the drive, SteamLibrary in
+    /// its chosen folder. It is reached through the link the app keeps in drive_c
+    /// (ExternalDrive), so its games keep drive_c paths for Madeira, Madeira Dock and
+    /// Wine alike, and Valve's client knows it from libraryfolders.vdf.
+    static let externalRelative = "ExternalDrive/SteamLibrary/steamapps"
+    static let externalWindowsRoot = "C:\\ExternalDrive\\SteamLibrary"
+    /// The client's own library as Valve's libraryfolders.vdf names it ("C:\Program Files (x86)\Steam").
+    static var clientWindowsRoot: String {
+        "C:\\" + libraryRelative.dropLast("/steamapps".count).replacingOccurrences(of: "/", with: "\\")
+    }
+
+    /// Whether an install (its drive-relative library folder) is in a library
     /// Madeira downloads into, and so can be updated or removed here.
     static func isManaged(library: String) -> Bool {
-        library.caseInsensitiveCompare(libraryRelative) == .orderedSame
+        library.caseInsensitiveCompare(libraryRelative) == .orderedSame ||
+            library.caseInsensitiveCompare(externalRelative) == .orderedSame
+    }
+}
+
+/// Valve's list of Steam library folders (`<client>/steamapps/libraryfolders.vdf`),
+/// which its client keeps and reads at start. The external drive's library is
+/// added once so the client finds the games downloaded there.
+enum SteamLibraryFolders {
+    /// `text` with `windowsPath` added as the next library, or nil when it lists
+    /// it already or cannot be read as a library list (a damaged file is left as
+    /// it is). Without a file (`text` nil) the list is the client's own library
+    /// and this one.
+    static func adding(_ windowsPath: String, clientPath: String, to text: String?, contentID: UInt64) -> String? {
+        func block(_ index: Int, _ path: String, _ id: UInt64) -> String {
+            let escaped = path.replacingOccurrences(of: "\\", with: "\\\\")
+            return ["\t\"\(index)\"", "\t{", "\t\t\"path\"\t\t\"\(escaped)\"", "\t\t\"label\"\t\t\"\"",
+                    "\t\t\"contentid\"\t\t\"\(id)\"", "\t\t\"totalsize\"\t\t\"0\"",
+                    "\t\t\"update_clean_bytes_tally\"\t\t\"0\"", "\t\t\"time_last_update_verified\"\t\t\"0\"",
+                    "\t\t\"apps\"", "\t\t{", "\t\t}", "\t}"].joined(separator: "\n")
+        }
+        guard let text else {
+            return "\"libraryfolders\"\n{\n" + block(0, clientPath, contentID &+ 1) + "\n" + block(1, windowsPath, contentID) + "\n}\n"
+        }
+        guard let data = text.data(using: .utf8), data.count <= 1 << 20, var parser = try? SteamKeyValues(data),
+              let root = try? parser.read(), let folders = root["libraryfolders"]?.fields,
+              let close = text.lastIndex(of: "}") else { return nil }
+        let listed = folders.values.compactMap { $0["path"]?.string?.replacingOccurrences(of: "\\\\", with: "\\") }
+        guard !listed.contains(where: { $0.caseInsensitiveCompare(windowsPath) == .orderedSame }) else { return nil }
+        let next = (folders.keys.compactMap { Int($0) }.max() ?? -1) + 1
+        return String(text[..<close]) + block(next, windowsPath, contentID) + "\n" + String(text[close...])
+    }
+
+    /// The record Steam keeps in each library's own folder (`libraryfolder.vdf`).
+    static func folderRecord(contentID: UInt64) -> String {
+        "\"libraryfolder\"\n{\n\t\"contentid\"\t\t\"\(contentID)\"\n\t\"label\"\t\t\"\"\n}\n"
+    }
+
+    /// Adds the library at `libraryRoot` (Windows path `windowsPath`) to the client's
+    /// list in `steamApps`, with its own record. True when the list changed.
+    @discardableResult
+    static func register(_ windowsPath: String, libraryRoot: URL, steamApps: URL) -> Bool {
+        let fm = FileManager.default
+        let id = UInt64.random(in: 1...UInt64(Int64.max))
+        let record = libraryRoot.appendingPathComponent("libraryfolder.vdf")
+        if !fm.fileExists(atPath: record.path) { try? folderRecord(contentID: id).write(to: record, atomically: true, encoding: .utf8) }
+        let file = steamApps.appendingPathComponent("libraryfolders.vdf")
+        var current: String?
+        if fm.fileExists(atPath: file.path) {
+            guard let text = try? String(contentsOf: file, encoding: .utf8) else { return false }
+            current = text
+        }
+        guard let next = adding(windowsPath, clientPath: SteamInstallPaths.clientWindowsRoot, to: current, contentID: id) else { return false }
+        do {
+            try fm.createDirectory(at: steamApps, withIntermediateDirectories: true)
+            try next.write(to: file, atomically: true, encoding: .utf8)
+            return true
+        } catch { return false }
     }
 }
 

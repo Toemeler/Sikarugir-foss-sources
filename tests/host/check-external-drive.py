@@ -427,6 +427,9 @@ try! fm.createSymbolicLink(atPath: dosdevices + "/c:", withDestinationPath: "../
 try! fm.createSymbolicLink(atPath: dosdevices + "/e:", withDestinationPath: "/old/drive")
 let drive = ExternalDrive()
 drive.store = ExternalDriveStore(directory: base.appendingPathComponent("support2"))
+drive.prefixPath = prefix
+try! fm.createDirectory(atPath: prefix + "/drive_c", withIntermediateDirectories: true)
+let cLink = prefix + "/drive_c/ExternalDrive"
 drive.link(prefix: prefix, program: nil)
 expect((try? fm.destinationOfSymbolicLink(atPath: dosdevices + "/c:")) == "../drive_c" &&
        (try? fm.destinationOfSymbolicLink(atPath: dosdevices + "/e:")) == nil &&
@@ -441,6 +444,44 @@ drive.link(prefix: prefix, program: "C:\\x.exe")
 expect(LogStore.shared.lines.last?.contains("(keep)") == true && probes.last?.1 == nil, "the next session keeps the link; a C: program is not probed")
 expect(drive.hostPath(ofWindowsPath: "D:\\ELDEN RING") == folder.resolvingSymlinksInPath().path + "/ELDEN RING" &&
        drive.hostPath(ofWindowsPath: "E:\\x") == nil, "a D: working folder on the host")
+
+// Steam downloads on the drive (owner's request, 2026-10-18): C:\ExternalDrive links the folder,
+// and the drive's Steam library is made there and added to Valve's library list.
+expect((try? fm.destinationOfSymbolicLink(atPath: cLink)) == folder.path, "drive_c/ExternalDrive links the chosen folder")
+expect(drive.connectedRoot == folder.resolvingSymlinksInPath().standardizedFileURL.path, "the connected folder for library scans")
+// The iPad's own libraryfolders.vdf, as Valve's client wrote it (2026-10-18).
+let valveVDF = "\"libraryfolders\"\n{\n\t\"0\"\n\t{\n\t\t\"path\"\t\t\"C:\\\\Program Files (x86)\\\\Steam\"\n\t\t\"label\"\t\t\"\"\n"
+    + "\t\t\"contentid\"\t\t\"4690018036079546150\"\n\t\t\"totalsize\"\t\t\"0\"\n\t\t\"update_clean_bytes_tally\"\t\t\"0\"\n"
+    + "\t\t\"time_last_update_verified\"\t\t\"0\"\n\t\t\"apps\"\n\t\t{\n\t\t}\n\t}\n}\n"
+let vdfURL = URL(fileURLWithPath: prefix + "/drive_c/Program Files (x86)/Steam/steamapps/libraryfolders.vdf")
+try! fm.createDirectory(at: vdfURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+try! valveVDF.write(to: vdfURL, atomically: true, encoding: .utf8)
+expect(drive.steamLibrary() == SteamInstallPaths.externalRelative, "downloads go to the drive's Steam library while it is connected")
+expect(fm.fileExists(atPath: folder.path + "/SteamLibrary/steamapps/common") &&
+       fm.fileExists(atPath: folder.path + "/SteamLibrary/libraryfolder.vdf"), "the library is made on the drive, with its own record")
+let listed = try! String(contentsOf: vdfURL, encoding: .utf8)
+expect(listed.hasPrefix(String(valveVDF.dropLast(2))) && listed.contains("\t\"1\"\n\t{\n\t\t\"path\"\t\t\"C:\\\\ExternalDrive\\\\SteamLibrary\"\n"),
+       "Valve's list keeps everything it had and adds the drive's library as 1")
+var reader = try! SteamKeyValues(listed.data(using: .utf8)!)
+let parsed = try! reader.read()
+expect(parsed["libraryfolders"]?["1"]?["path"]?.string?.replacingOccurrences(of: "\\\\", with: "\\") == SteamInstallPaths.externalWindowsRoot &&
+       parsed["libraryfolders"]?["0"]?["contentid"]?.string == "4690018036079546150",
+       "the production reader reads both libraries back (Madeira Dock's scan)")
+_ = drive.steamLibrary()
+expect((try? String(contentsOf: vdfURL, encoding: .utf8)) == listed, "the library is added once")
+expect(SteamLibraryFolders.adding("c:\\externaldrive\\steamlibrary", clientPath: "C:\\Program Files (x86)\\Steam", to: listed, contentID: 7) == nil &&
+       SteamLibraryFolders.adding(SteamInstallPaths.externalWindowsRoot, clientPath: "C:\\x", to: "not a library list {", contentID: 7) == nil,
+       "a library listed in any case, and a damaged list, are left as they are")
+if let fresh = SteamLibraryFolders.adding(SteamInstallPaths.externalWindowsRoot, clientPath: SteamInstallPaths.clientWindowsRoot, to: nil, contentID: 7) {
+    var freshReader = try! SteamKeyValues(fresh.data(using: .utf8)!)
+    let freshRoot = try! freshReader.read()
+    expect(freshRoot["libraryfolders"]?["0"]?["path"]?.string == "C:\\\\Program Files (x86)\\\\Steam" &&
+           freshRoot["libraryfolders"]?["1"]?["path"]?.string == "C:\\\\ExternalDrive\\\\SteamLibrary",
+           "without a list yet: the client's own library first, then the drive's")
+} else { expect(false, "without a list yet: a new list") }
+expect(SteamInstallPaths.isManaged(library: "ExternalDrive/SteamLibrary/steamapps") &&
+       SteamInstallPaths.isManaged(library: SteamInstallPaths.libraryRelative) && !SteamInstallPaths.isManaged(library: "Games/steamapps"),
+       "both of Madeira's libraries are managed (updates, uninstall); others are not")
 MadeiraConfig.values["external-drive-letter"] = "e"
 drive.link(prefix: prefix, program: nil)
 expect((try? fm.destinationOfSymbolicLink(atPath: dosdevices + "/d:")) == nil &&
@@ -465,9 +506,13 @@ if case .success(let again) = drive.prepare() {
     expect(again.resolvingSymlinksInPath().path == unplugged.appendingPathComponent("Games").path,
            "the next start resolves the bookmark again (a drive connected again elsewhere)")
 } else { expect(false, "the next start resolves the bookmark again") }
+expect((try? fm.destinationOfSymbolicLink(atPath: cLink)).map { URL(fileURLWithPath: $0).resolvingSymlinksInPath().path }
+       == unplugged.appendingPathComponent("Games").path, "drive_c/ExternalDrive follows the folder to its new place")
 drive.forget()
 drive.link(prefix: prefix, program: nil)
-expect(drive.record == nil && (try? fm.destinationOfSymbolicLink(atPath: dosdevices + "/d:")) == nil, "forgotten: no record, no link")
+expect(drive.record == nil && (try? fm.destinationOfSymbolicLink(atPath: dosdevices + "/d:")) == nil &&
+       (try? fm.destinationOfSymbolicLink(atPath: cLink)) == nil && drive.steamLibrary() == nil,
+       "forgotten: no record, no links, downloads stay on the iPad")
 if let status = { () -> ExternalDrive.Status? in try! drive.choose(unplugged.appendingPathComponent("Games")); return drive.status() }() {
     expect(status.failure == nil && status.name == "Games" && status.fileSystem != nil && status.freeBytes != nil, "Settings status: name, file system, free space")
 } else { expect(false, "Settings status") }
@@ -500,6 +545,7 @@ if swiftc and sys.platform == 'darwin':
     (sdir / 'main.swift').write_text(swift_main, encoding='utf-8')
     exe = sdir / 'check'
     built = subprocess.run([swiftc, '-O', '-o', str(exe), str(root / 'app/Madeira/ExternalDrive.swift'),
+                            str(root / 'app/Madeira/SteamInstall.swift'), str(root / 'app/Madeira/SteamKeyValues.swift'),
                             str(sdir / 'Stubs.swift'), str(sdir / 'main.swift')], capture_output=True, text=True)
     if built.returncode:
         print(built.stderr[-6000:])
@@ -614,6 +660,30 @@ check(view.count('if (ios_fmap_read_fails( ios_fmap_external( fd ) )) return err
       'a failed read on the drive fails the mapping with its status')
 check('ios_map_ring[slot].external = fd >= 0 && ios_fmap_external( fd ) == 1;' in virt and 'ON THE EXTERNAL DRIVE' in virt,
       'a fault report says when the mapping was on the external drive')
+# Steam downloads go to the drive while it is connected (owner's request, 2026-10-18).
+owned = (root / 'app/Madeira/SteamOwnedLibrary.swift').read_text(encoding='utf-8')
+choose = body_of(owned, '    private func downloadLibrary(_ appID: Int) -> String {')
+check(choose.index('MadeiraDock.games(drive: Self.drive)') < choose.index('DepotDownloader.hasPartialDownload(') <
+      choose.index('ExternalDrive.shared.steamLibrary() ?? SteamInstallPaths.libraryRelative'),
+      "a download goes where the game is installed, else where its partial download is, else to the drive while connected, else the iPad")
+run_body = owned[owned.index('    private func run(_ appID: Int) async {'):owned.index('    // MARK: Messages')]
+check('let library = downloadLibrary(appID)' in run_body and 'try await downloader.install(info, steamApps: apps,' in run_body and
+      'library: library, installed: true,' in run_body and 'Self.steamApps' not in run_body,
+      'the download, its install record and its library entry use that library')
+check('let apps = Self.drive.appendingPathComponent(game.library, isDirectory: true), id = game.id' in owned and
+      'for apps in libraries { SteamInstallFiles.delete(' in owned,
+      "uninstall removes from the game's own library; a cancelled first install from both")
+games_src = (root / 'app/Madeira/SteamGames.swift').read_text(encoding='utf-8')
+check('steamApps: drive.appendingPathComponent(game.library, isDirectory: true)' in games_src,
+      "an installed game's build is read from its own library (updates on the drive)")
+dock_src = (root / 'app/Madeira/MadeiraDock.swift').read_text(encoding='utf-8')
+scan = body_of(dock_src, '    static func games(drive: URL) -> [DockGame] {')
+check('guard roots.contains(where: { resolved.hasPrefix($0 + "/") }),' in scan and
+      'libraries.append(SteamInstallPaths.externalRelative)' in scan,
+      "Madeira Dock's scan reads the drive's library through C:\\ExternalDrive while it is connected")
+check('MadeiraDock.externalRoot = { ExternalDrive.shared.connectedRoot }' in library and
+      'let throughLink = letter == nil && relative.lowercased().hasPrefix(ExternalDrive.driveCLinkName.lowercased() + "/")' in library,
+      "the app connects the scan, and a Steam game's program on the drive passes the launch check")
 check('python3 tests/host/check-external-drive.py' in workflow and 'codex/external-ssd-games-20261017' in workflow,
       'host-stability runs this check on this branch')
 

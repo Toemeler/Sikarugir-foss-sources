@@ -108,6 +108,10 @@ enum MadeiraDock {
         return (lent, Set((state["InstalledDepots"]?.fields ?? [:]).keys.prefix(256)))
     }
 
+    /// The external drive's folder while it is connected, resolved (ExternalDrive.connectedRoot;
+    /// LibraryModel sets it), else nil.
+    nonisolated(unsafe) static var externalRoot: () -> String? = { nil }
+
     /// Installed games in the client's own library (`<client>/steamapps`) and the other
     /// libraries on C: that its `libraryfolders.vdf` lists. Read-only.
     static func games(drive: URL) -> [DockGame] {
@@ -122,6 +126,14 @@ enum MadeiraDock {
                 if !libraries.contains(where: { $0.caseInsensitiveCompare(relative) == .orderedSame }) { libraries.append(relative) }
             }
         }
+        // A library reached through drive_c's ExternalDrive link (Madeira's downloads on the
+        // external drive, SteamInstallPaths.externalRelative) lies inside the drive's folder;
+        // it is read while the drive is connected even if the client's list lost it.
+        let external = externalRoot()
+        let roots = [drive.resolvingSymlinksInPath().path] + [external].compactMap { $0 }
+        if external != nil, !libraries.contains(where: { $0.caseInsensitiveCompare(SteamInstallPaths.externalRelative) == .orderedSame }) {
+            libraries.append(SteamInstallPaths.externalRelative)
+        }
         var result: [DockGame] = []
         // Apps that only lend depots to another install ("Shared Only", e.g. GTA V
         // Enhanced's RGL/SC 1899670) have a record but nothing to start. A game that
@@ -130,7 +142,8 @@ enum MadeiraDock {
         var lent: [Int: Set<String>] = [:], installed: [Int: Set<String>] = [:]
         for library in libraries.prefix(16) {
             let folder = drive.appendingPathComponent(library, isDirectory: true)
-            guard folder.resolvingSymlinksInPath().path.hasPrefix(drive.resolvingSymlinksInPath().path + "/"),
+            let resolved = folder.resolvingSymlinksInPath().path
+            guard roots.contains(where: { resolved.hasPrefix($0 + "/") }),
                   let names = try? fm.contentsOfDirectory(atPath: folder.path) else { continue }
             for file in names.sorted().prefix(2000) where file.hasPrefix("appmanifest_") && file.hasSuffix(".acf") {
                 guard let data = try? Data(contentsOf: folder.appendingPathComponent(file)) else { continue }
