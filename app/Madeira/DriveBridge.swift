@@ -68,6 +68,7 @@ final class DriveBridgeCore {
     private let root: () -> URL?
     private let log: (String) -> Void
     private let fm = FileManager.default
+    private var lastSweep = Date.distantPast
 
     init(documents: URL, root: @escaping () -> URL?, log: @escaping (String) -> Void) {
         dir = documents.appendingPathComponent("drive-bridge", isDirectory: true)
@@ -87,8 +88,11 @@ final class DriveBridgeCore {
     @discardableResult
     func pollOnce(now: Date = Date()) -> Int {
         let requests = sub("requests")
-        guard let names = try? fm.contentsOfDirectory(atPath: requests.path), !names.isEmpty else { return 0 }
+        let names = (try? fm.contentsOfDirectory(atPath: requests.path)) ?? []
         var handled = 0
+        defer {   // after answers, and once a minute when idle (old pulled copies must not stay in Documents)
+            if handled > 0 || now.timeIntervalSince(lastSweep) > 60 { sweep(now: now); lastSweep = now }
+        }
         for name in names.sorted() {
             let file = requests.appendingPathComponent(name)
             guard let id = DriveBridgeRules.requestID(fileName: name) else {
@@ -109,7 +113,6 @@ final class DriveBridgeCore {
             try? fm.removeItem(at: file)
             handled += 1
         }
-        sweep(now: now)
         return handled
     }
 
