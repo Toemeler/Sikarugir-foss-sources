@@ -475,8 +475,10 @@ expect(SteamLibraryFolders.adding("c:\\externaldrive\\steamlibrary", clientPath:
 if let fresh = SteamLibraryFolders.adding(SteamInstallPaths.externalWindowsRoot, clientPath: SteamInstallPaths.clientWindowsRoot, to: nil, contentID: 7) {
     var freshReader = try! SteamKeyValues(fresh.data(using: .utf8)!)
     let freshRoot = try! freshReader.read()
-    expect(freshRoot["libraryfolders"]?["0"]?["path"]?.string == "C:\\\\Program Files (x86)\\\\Steam" &&
-           freshRoot["libraryfolders"]?["1"]?["path"]?.string == "C:\\\\ExternalDrive\\\\SteamLibrary",
+    // As Madeira Dock's scan reads a path (the reader may or may not unescape "\\").
+    func path(_ key: String) -> String? { freshRoot["libraryfolders"]?[key]?["path"]?.string?.replacingOccurrences(of: "\\\\", with: "\\") }
+    expect(path("0") == SteamInstallPaths.clientWindowsRoot && path("1") == SteamInstallPaths.externalWindowsRoot &&
+           SteamInstallPaths.clientWindowsRoot == "C:\\Program Files (x86)\\Steam" && fresh.contains("\"C:\\\\Program Files (x86)\\\\Steam\""),
            "without a list yet: the client's own library first, then the drive's")
 } else { expect(false, "without a list yet: a new list") }
 expect(SteamInstallPaths.isManaged(library: "ExternalDrive/SteamLibrary/steamapps") &&
