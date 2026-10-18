@@ -28,7 +28,16 @@ set -euo pipefail
 
 R="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TC="$R/toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin"
-export PATH="$TC:$PATH"
+# Homebrew keeps bison/flex keg-only on macOS; the system bison is 2.3, below
+# Wine's minimum. Match configure_wine.sh so a clean CI runner uses Homebrew's
+# current parsers for this separate i386 configure tree too.
+if command -v brew >/dev/null 2>&1; then
+    BISON_BIN="$(brew --prefix bison 2>/dev/null || true)/bin"
+    FLEX_BIN="$(brew --prefix flex 2>/dev/null || true)/bin"
+    export PATH="$BISON_BIN:$FLEX_BIN:$TC:$PATH"
+else
+    export PATH="$TC:$PATH"
+fi
 B="$R/wine/build-i386"
 DEST="$R/app/Madeira/i386-windows"
 JOBS="${JOBS:-$(sysctl -n hw.ncpu 2>/dev/null || echo 8)}"
