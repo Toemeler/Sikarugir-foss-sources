@@ -97,6 +97,19 @@ done < <(grep -oE '^(dlls|programs)/[^/]+/i386-windows/[^/ :]+' "$B/Makefile" | 
 [ ${#TARGETS[@]} -gt 0 ] || { echo "no i386 targets matched" >&2; exit 2; }
 echo "== ${#TARGETS[@]} i386 modules (skipped by policy: ${#SKIP[@]} names) =="
 
+# ------------------------------------------------------------------ patches
+# Madeira's changes to the pinned Wine's PE side for this farm, in
+# build/wine-i386/patches (applied once; a re-run finds them applied).
+for p in "$R"/build/wine-i386/patches/*.patch; do
+    [ -f "$p" ] || continue
+    if git -C "$R/wine" apply --reverse --check "$p" 2>/dev/null; then
+        echo "patch already applied: $(basename "$p")"
+    else
+        git -C "$R/wine" apply "$p"
+        echo "patch applied: $(basename "$p")"
+    fi
+done
+
 # -------------------------------------------------------------------- build
 cd "$B"
 set +e

@@ -262,6 +262,7 @@ the switch is only consulted for a WoW64 process, window or thread.
 | `MADEIRA_WOW_RWX_PLAIN` | unset (automatic) | 32-bit | Anonymous RWX memory in a window is plain read/write to the host once Wine Mono's `libmono-2.0-x86.dll` is mapped there; 1: in every window, 0: never (stores go through the JIT pool's alias, as before; also keeps FEX's Mono bridge off) |
 | `MADEIRA_WINEMONO_BRIDGE` | automatic for `libmono-2.0-x86.dll` | FEX WOW64 | FEX's Mono backpatcher bridge (ml712) and, once it finds the backpatcher, SMC detection off for the process (ml1280); 0 keeps both off. The 64-bit runtime still needs 1 |
 | `MADEIRA_MONO_DEFAULTS` | on | Wine Mono | mscoree sets `MONO_THREADS_SUSPEND=coop` and adds `keep-delegates` to `MONO_DEBUG` before Mono loads; values already set win; 0 sets nothing |
+| `MADEIRA_NATIVE_ARM64` | unset (x64 host) | i386 `kernelbase.dll` | `IsWow64Process2` reports an x64 host (`IMAGE_FILE_MACHINE_AMD64`) to 32-bit programs, as x64 Windows would and as `GetNativeSystemInfo` already does; installers that check the host otherwise refuse x64 packages (Adobe's error 21, `isESDCompatible ... OS architecture(2)`). 1: the real ARM64 host |
 
 `inproc-sync` (madsync) is a `madeira.cfg` key, not part of this series, and
 keeps its default of 1.
@@ -276,7 +277,8 @@ none are committed with the code.
    minus a documented skip list, strips and installs into
    `app/Madeira/i386-windows/`, builds DXMT's i386 `d3d11`/`dxgi`/`d3d10core`/
    `winemetal` against that tree with meson, and reports the farm's import
-   closure. `build/wine-i386/build.sh kernel32 user32` rebuilds only those
+   closure. Before building it applies `build/wine-i386/patches/*.patch` to
+   the pinned Wine (skipping any already applied). `build/wine-i386/build.sh kernel32 user32` rebuilds only those
    modules; `SKIP_DXMT=1` leaves DXMT out. The unix side needs
    `libdxmt_combined.a` rebuilt from the pinned DXMT (`build/dxmt-ios/build.sh`),
    which carries winemetal's 32-bit table.

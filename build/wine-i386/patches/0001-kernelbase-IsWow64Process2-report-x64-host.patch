@@ -1,0 +1,25 @@
+diff --git a/dlls/kernelbase/process.c b/dlls/kernelbase/process.c
+index 451c852..5dc2950 100644
+--- a/dlls/kernelbase/process.c
++++ b/dlls/kernelbase/process.c
+@@ -1021,7 +1021,19 @@ BOOL WINAPI DECLSPEC_HOTPATCH IsProcessorFeaturePresent ( DWORD feature )
+  */
+ BOOL WINAPI DECLSPEC_HOTPATCH IsWow64Process2( HANDLE process, USHORT *machine, USHORT *native_machine )
+ {
+-    return set_ntstatus( RtlWow64GetProcessMachines( process, machine, native_machine ));
++    WCHAR value[2];
++
++    if (!set_ntstatus( RtlWow64GetProcessMachines( process, machine, native_machine ))) return FALSE;
++
++    /* Madeira: x86 programs run emulated on an ARM64 host. Installers that check the
++     * host (Adobe's PIM isESDCompatible, error 21) then refuse their x64 packages, so
++     * report the x64 host the program would see on x64 Windows, as GetNativeSystemInfo
++     * already does. MADEIRA_NATIVE_ARM64=1 reports the real ARM64 host. */
++    if (native_machine && *native_machine == IMAGE_FILE_MACHINE_ARM64 &&
++        !(GetEnvironmentVariableW( L"MADEIRA_NATIVE_ARM64", value, ARRAY_SIZE(value) ) == 1 &&
++          value[0] == '1'))
++        *native_machine = IMAGE_FILE_MACHINE_AMD64;
++    return TRUE;
+ }
+ 
+ 
