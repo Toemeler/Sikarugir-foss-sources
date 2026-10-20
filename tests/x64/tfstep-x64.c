@@ -19,6 +19,14 @@
  * once per exception with EstablisherFrame = the context's Rsp (frame=rsp+0), also
  * in "call" where the step stops on the callee's ret: 13/13 there as well.
  *
+ * The last cases check the rest of the context such a handler relies on: drrt
+ * (Dr0-3 written into one handler's context come back in the next exception's),
+ * hwbp (a hardware execute breakpoint armed from the handler's context traps), both
+ * requiring CONTEXT_DEBUG_REGISTERS in every context, and fault (RF set in a fault's
+ * context). Windows 10 (i7-10750H): 16/16 for both handlers; every context carries
+ * ContextFlags 0010005f, a hardware breakpoint arrives as SINGLE_STEP with Dr6
+ * ffff0ff1, and Dr0-3 come back only while Dr7 arms them (Dr7 reads back 455).
+ *
  * The case bytes come from ml64 (the MASM source is in each comment); they are
  * copied into an RWX buffer, so offsets below are from the start of each case.
  * "expect" is real hardware (Windows 10, measured); every line also goes to
@@ -88,12 +96,28 @@ static const unsigned char c_icebp[] = {0xf1, 0x90, 0x90, 0xc3};
 /* +00 int 1 (CD 01, not allowed from user mode)  +02 nop  +03 nop  +04 ret */
 static const unsigned char c_int1[] = {0xcd, 0x01, 0x90, 0x90, 0xc3};
 
-enum { M_CLEAR, M_KEEP, M_BP };
+/* The context beyond TF: what a copy protection's handler reads and writes. */
+/* Debug registers written into the handler's context come back in the next one:
+ * +00 int3 (handler: Dr0-3 = buffer+100h..400h, Dr7 = 55h: all four armed as execute
+ *   breakpoints on bytes that never run; Windows drops Dr0-3 that Dr7 leaves disabled)
+ * +01 nop  +02 int3 (handler: reads them, clears them)  +03 nop  +04 ret */
+static const unsigned char c_drrt[] = {0xcc, 0x90, 0xcc, 0x90, 0xc3};
+/* A hardware execute breakpoint set from the handler's context:
+ * +00 int3 (handler: Dr0 = +03, Dr7 = 1)  +01 nop  +02 nop  +03 nop (breakpoint)
+ * +04 int3 (handler: Dr0 = Dr7 = 0, also when +03 never trapped)  +05 nop  +06 ret */
+static const unsigned char c_hwbp[] = {0xcc, 0x90, 0x90, 0x90, 0xcc, 0x90, 0xc3};
+/* A fault's context has RF set (the CPU sets it for every fault but an instruction breakpoint).
+ * +00 mov eax,[0]  +07 nop  +08 ret */
+static const unsigned char c_fault[] = {0x8b, 0x04, 0x25, 0x00, 0x00, 0x00, 0x00, 0x90, 0xc3};
+
+enum { M_CLEAR, M_KEEP, M_BP, M_DR, M_HW };
 
 #define MAXEV 16
 #define TF 0x100u
 #define DF 0x400u
 #define ARITH 0x8d5u        /* CF PF AF ZF SF OF */
+#define RF 0x10000u
+#define DR_PAT(i) ((ULONG64)g_buf + 0x100 * ((i) + 1))  /* what the drrt handler writes to Dr<i> */
 
 typedef struct { DWORD code; int addr, alt; } expect_t;   /* alt: also accepted (0 = none) */
 
@@ -107,6 +131,7 @@ typedef struct {
     unsigned out_mask, out_want;    /* the value the case stores through rcx */
     int nexp;
     expect_t exp[MAXEV];
+    DWORD ctxf;             /* ContextFlags bits every exception's context must carry */
 } case_t;
 
 #define SS EXCEPTION_SINGLE_STEP
@@ -128,6 +153,11 @@ static const case_t CASES[] = {
     {"bp",    c_bp,    sizeof(c_bp),    M_BP,    1, 0, 0, 0, 0, 2, {{EXCEPTION_BREAKPOINT, 0x00}, {SS, 0x02}}},
     {"icebp", c_icebp, sizeof(c_icebp), M_CLEAR, 1, 0, 0, 0, 0, 1, {{SS, 0x01}}},
     {"int1",  c_int1,  sizeof(c_int1),  M_CLEAR, 2, 0, 0, 0, 0, 1, {{EXCEPTION_ACCESS_VIOLATION, 0x00}}},
+    {"drrt",  c_drrt,  sizeof(c_drrt),  M_DR,    1, 0, 0, 0, 0, 2,
+     {{EXCEPTION_BREAKPOINT, 0x00}, {EXCEPTION_BREAKPOINT, 0x02}}, CONTEXT_DEBUG_REGISTERS},
+    {"hwbp",  c_hwbp,  sizeof(c_hwbp),  M_HW,    1, 0, 0, 0, 0, 3,
+     {{EXCEPTION_BREAKPOINT, 0x00}, {SS, 0x03}, {EXCEPTION_BREAKPOINT, 0x04}}, CONTEXT_DEBUG_REGISTERS},
+    {"fault", c_fault, sizeof(c_fault), M_CLEAR, 7, RF, RF, 0, 0, 1, {{EXCEPTION_ACCESS_VIOLATION, 0x00}}},
 };
 #define NCASES ((int)(sizeof(CASES) / sizeof(CASES[0])))
 
@@ -212,6 +242,33 @@ static int on_exception(EXCEPTION_RECORD *r, CONTEXT *c, unsigned live, int via,
         g_lost++;
     }
     g_n++;
+
+    /* Only the context is written, as a protection's handler does: ContextFlags stay as delivered. */
+    if (k->mode == M_DR && r->ExceptionCode == EXCEPTION_BREAKPOINT && addr_inside) {
+        if (addr == base) {
+            c->Dr0 = DR_PAT(0); c->Dr1 = DR_PAT(1); c->Dr2 = DR_PAT(2); c->Dr3 = DR_PAT(3);
+            c->Dr7 = 0x55;
+        } else {
+            c->Dr0 = c->Dr1 = c->Dr2 = c->Dr3 = 0;
+            c->Dr7 = 0;
+        }
+        c->Rip = addr + 1;
+        return 1;
+    }
+    if (k->mode == M_HW) {
+        if (r->ExceptionCode == EXCEPTION_BREAKPOINT && addr_inside) {
+            if (addr == base) { c->Dr0 = base + 3; c->Dr7 = 1; }   /* L0, execute, 1 byte */
+            else { c->Dr0 = 0; c->Dr7 = 0; }
+            c->Rip = addr + 1;
+            return 1;
+        }
+        if (r->ExceptionCode == EXCEPTION_SINGLE_STEP) {
+            /* The breakpoint stops before +03 runs: disarm it and run it. */
+            c->Dr0 = 0; c->Dr7 = 0;
+            c->EFlags &= ~TF;
+            return 1;
+        }
+    }
 
     if (r->ExceptionCode == EXCEPTION_SINGLE_STEP && inside) {
         if (k->mode == M_KEEP && c->Rip - base < k->len - 2 && g_n < MAXEV) c->EFlags |= TF;
@@ -324,12 +381,18 @@ static int run_cases(int via)
                  (g_ev[j].addr == k->exp[j].addr || (k->exp[j].alt && g_ev[j].addr == k->exp[j].alt));
         int ctx_ok = !k->ctx_mask || (g_n > 0 && (g_ev[0].eflags & k->ctx_mask) == k->ctx_want);
         int out_ok = !k->out_mask || (out & k->out_mask) == k->out_want;
-        int live_ok = 1, via_ok = 1;
+        int live_ok = 1, via_ok = 1, ctxf_ok = 1, dr_ok = 1;
         for (int j = 0; j < g_n && j < MAXEV; j++) {
             if (g_ev[j].handler_eflags & (TF | DF)) live_ok = 0;
             if (g_ev[j].via != via) via_ok = 0;
+            if ((g_ev[j].ctxflags & k->ctxf) != k->ctxf) ctxf_ok = 0;
         }
-        ok = ok && ctx_ok && out_ok && live_ok && via_ok;
+        if (k->mode == M_DR)
+            dr_ok = g_n >= 2 && g_ev[1].dr0 == DR_PAT(0) && g_ev[1].dr1 == DR_PAT(1) &&
+                    g_ev[1].dr2 == DR_PAT(2) && g_ev[1].dr3 == DR_PAT(3) && (g_ev[1].dr7 & 0xff) == 0x55;
+        if (k->mode == M_HW)
+            dr_ok = g_n >= 2 && g_ev[1].code == EXCEPTION_SINGLE_STEP && (g_ev[1].dr6 & 0xf) == 1;
+        ok = ok && ctx_ok && out_ok && live_ok && via_ok && ctxf_ok && dr_ok;
         matched += ok;
 
         lg("[%s%s] %s: %d exception(s), %d after the case, expect", pre, k->name, ok ? "MATCH" : "DIFF", g_n, g_outside);
@@ -343,6 +406,11 @@ static int run_cases(int via)
         if (!out_ok) lg("  read back %llx: bits %03x should be %03x\n", out, k->out_mask, k->out_want);
         if (!live_ok) lg("  the handler ran with TF or DF set (Windows clears both for it)\n");
         if (!via_ok) lg("  not every exception reached the %s handler\n", VIA_NAME[via]);
+        if (!ctxf_ok) lg("  a context lacks ContextFlags %08lx (CONTEXT_DEBUG_REGISTERS)\n", k->ctxf);
+        if (!dr_ok && k->mode == M_DR)
+            lg("  Dr0-3/Dr7 written by the handler did not come back (want %llx/%llx/%llx/%llx, Dr7 55)\n",
+               DR_PAT(0), DR_PAT(1), DR_PAT(2), DR_PAT(3));
+        if (!dr_ok && k->mode == M_HW) lg("  no hardware breakpoint at +03 with Dr6 B0 set\n");
         for (int j = 0; j < g_n && j < MAXEV; j++) {
             const event_t *e = &g_ev[j];
             lg("  #%d %08lx %s addr=+%02llx rip=+%02llx eflags=%08lx flags=%lx params=%lu [%llx %llx] "
