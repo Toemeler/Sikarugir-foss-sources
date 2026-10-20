@@ -18,6 +18,8 @@ B="$R/wine/build-arm64ec"
 # submodule (patches/, applied in name order; one already applied is left as it is):
 #   0001-arm64ec-x64-debug-registers  the x64 debug registers a guest sets through a
 #                       context come back in its exception contexts (tests/x64/tfstep-x64.c "drrt")
+#   0002-arm64ec-guest-seh-log-dr6  log what an x64 frame handler returns and does to its context
+#                       ([guest-seh]); Dr6 reads ffff0ff0 while Dr7 is armed, as on Windows 10
 for P in "$R"/build/wine-pe/patches/*.patch; do
     [ -e "$P" ] || continue
     if git -C "$R/wine" apply --reverse --check "$P" 2>/dev/null; then

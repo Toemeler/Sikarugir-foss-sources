@@ -125,4 +125,5 @@ signed off under the DCO (the fork's `CONTRIBUTING.md`):
   sets through a context come back in its exception contexts. Not a commit in
   the fork: the shipped arm64ec-windows/ntdll.dll is the pinned wine (9129e9684da)
   plus build/wine-pe/patches/0001-arm64ec-x64-debug-registers.patch, which
-  build/wine-pe/build-ntdll.sh applies.
+  build/wine-pe/build-ntdll.sh applies, and 0002-arm64ec-guest-seh-log-dr6.patch
+  (a [guest-seh] log of x64 frame handlers; Dr6 reserved bits while Dr7 is armed).
