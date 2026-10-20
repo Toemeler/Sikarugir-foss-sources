@@ -1607,6 +1607,233 @@ NTSTATUS WINAPI NtCreateThread( HANDLE *handle, ACCESS_MASK access, OBJECT_ATTRI
     return STATUS_NOT_IMPLEMENTED;
 }
 
+/* [xproc-start] A remote thread's start routine in the target's own copy of its module.
+ *
+ * Windows maps kernel32/ntdll at one address in every process, so an injector takes
+ * LoadLibraryW from its own kernel32 and hands it to CreateRemoteThread (the Seamless
+ * Co-op launcher does exactly this with ersc.dll). Madeira's pseudo-processes share one
+ * address space and each loads its own copy of every module at its own address, so the
+ * address named the CREATOR's kernel32: the game's thread ran the launcher's LoadLibraryW,
+ * the launcher's ntdll mapped ersc.dll and told the launcher's FEX, and the game's FEX
+ * found no executable range at ersc.dll's entry (c0000005, log 2026-10-20 17:20).
+ *
+ * The creator notes the module (base name) and export (or RVA) of the start address;
+ * the new thread, in its first NtContinue after loader_init (kernel32 loaded by then),
+ * swaps X0 (= RtlUserThreadStart's entry) for the same export of its own copy.
+ * MADEIRA_XPROC_START=0 turns it off. */
+#define IOS_XPS_SLOTS 8
+struct ios_xps_slot
+{
+    ULONG_PTR func;      /* the creator's address, 0 = free */
+    ULONG_PTR rva;
+    PEB      *creator;
+    WCHAR     module[64];
+    char      export[64];
+};
+static struct ios_xps_slot ios_xps_slots[IOS_XPS_SLOTS];
+static volatile int ios_xps_lock;
+static volatile int ios_xps_pending;
+
+static BOOL ios_xps_enabled(void)
+{
+    static int enabled = -1;
+    if (enabled < 0)
+    {
+        const char *env = getenv( "MADEIRA_XPROC_START" );
+        enabled = !(env && env[0] == '0');
+    }
+    return enabled;
+}
+
+static LDR_DATA_TABLE_ENTRY *ios_xps_module_for_va( PEB *peb, ULONG_PTR va )
+{
+    LIST_ENTRY *head, *entry;
+    if (!peb || !peb->LdrData) return NULL;
+    head = &peb->LdrData->InLoadOrderModuleList;
+    if (!head->Flink) return NULL;
+    for (entry = head->Flink; entry && entry != head; entry = entry->Flink)
+    {
+        LDR_DATA_TABLE_ENTRY *mod = CONTAINING_RECORD( entry, LDR_DATA_TABLE_ENTRY, InLoadOrderLinks );
+        ULONG_PTR base = (ULONG_PTR)mod->DllBase;
+        if (base && va >= base && va < base + mod->SizeOfImage) return mod;
+    }
+    return NULL;
+}
+
+static BOOL ios_xps_name_eq( const UNICODE_STRING *name, const WCHAR *want )
+{
+    USHORT i, len = name->Length / sizeof(WCHAR);
+    if (!name->Buffer) return FALSE;
+    for (i = 0; i < len; i++)
+    {
+        WCHAR a = name->Buffer[i], b = want[i];
+        if (!b) return FALSE;
+        if (a >= 'A' && a <= 'Z') a += 'a' - 'A';
+        if (b >= 'A' && b <= 'Z') b += 'a' - 'A';
+        if (a != b) return FALSE;
+    }
+    return want[len] == 0;
+}
+
+static LDR_DATA_TABLE_ENTRY *ios_xps_module_by_name( PEB *peb, const WCHAR *name )
+{
+    LIST_ENTRY *head, *entry;
+    if (!peb || !peb->LdrData) return NULL;
+    head = &peb->LdrData->InLoadOrderModuleList;
+    if (!head->Flink) return NULL;
+    for (entry = head->Flink; entry && entry != head; entry = entry->Flink)
+    {
+        LDR_DATA_TABLE_ENTRY *mod = CONTAINING_RECORD( entry, LDR_DATA_TABLE_ENTRY, InLoadOrderLinks );
+        if (ios_xps_name_eq( &mod->BaseDllName, name )) return mod;
+    }
+    return NULL;
+}
+
+static IMAGE_EXPORT_DIRECTORY *ios_xps_exports( ULONG_PTR base, DWORD *dir_rva, DWORD *dir_size )
+{
+    const IMAGE_DOS_HEADER *dos = (const IMAGE_DOS_HEADER *)base;
+    const IMAGE_NT_HEADERS64 *nt;
+    const IMAGE_DATA_DIRECTORY *dir;
+    if (dos->e_magic != IMAGE_DOS_SIGNATURE) return NULL;
+    nt = (const IMAGE_NT_HEADERS64 *)(base + dos->e_lfanew);
+    if (nt->Signature != IMAGE_NT_SIGNATURE || nt->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC) return NULL;
+    if (nt->OptionalHeader.NumberOfRvaAndSizes <= IMAGE_DIRECTORY_ENTRY_EXPORT) return NULL;
+    dir = &nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
+    if (!dir->VirtualAddress || !dir->Size) return NULL;
+    *dir_rva = dir->VirtualAddress;
+    *dir_size = dir->Size;
+    return (IMAGE_EXPORT_DIRECTORY *)(base + dir->VirtualAddress);
+}
+
+/* The export name whose address is exactly rva, or FALSE. */
+static BOOL ios_xps_export_name( ULONG_PTR base, ULONG_PTR rva, char *out, size_t out_size )
+{
+    DWORD dir_rva, dir_size, i, j;
+    IMAGE_EXPORT_DIRECTORY *exp = ios_xps_exports( base, &dir_rva, &dir_size );
+    const DWORD *funcs, *names;
+    const WORD *ords;
+    if (!exp) return FALSE;
+    funcs = (const DWORD *)(base + exp->AddressOfFunctions);
+    names = (const DWORD *)(base + exp->AddressOfNames);
+    ords  = (const WORD *)(base + exp->AddressOfNameOrdinals);
+    for (i = 0; i < exp->NumberOfNames; i++)
+    {
+        if (ords[i] >= exp->NumberOfFunctions || funcs[ords[i]] != rva) continue;
+        {
+            const char *name = (const char *)(base + names[i]);
+            for (j = 0; j + 1 < out_size && name[j]; j++) out[j] = name[j];
+            out[j] = 0;
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+/* The address of export name in the image at base (forwarders are skipped), or 0. */
+static ULONG_PTR ios_xps_export_va( ULONG_PTR base, const char *want )
+{
+    DWORD dir_rva, dir_size, i;
+    IMAGE_EXPORT_DIRECTORY *exp = ios_xps_exports( base, &dir_rva, &dir_size );
+    const DWORD *funcs, *names;
+    const WORD *ords;
+    if (!exp) return 0;
+    funcs = (const DWORD *)(base + exp->AddressOfFunctions);
+    names = (const DWORD *)(base + exp->AddressOfNames);
+    ords  = (const WORD *)(base + exp->AddressOfNameOrdinals);
+    for (i = 0; i < exp->NumberOfNames; i++)
+    {
+        DWORD frva;
+        if (strcmp( (const char *)(base + names[i]), want )) continue;
+        if (ords[i] >= exp->NumberOfFunctions) return 0;
+        frva = funcs[ords[i]];
+        if (frva >= dir_rva && frva < dir_rva + dir_size) return 0; /* forwarder */
+        return base + frva;
+    }
+    return 0;
+}
+
+static void ios_xps_lock_take(void) { while (__sync_lock_test_and_set( &ios_xps_lock, 1 )) sched_yield(); }
+static void ios_xps_lock_drop(void) { __sync_lock_release( &ios_xps_lock ); }
+
+/* Creator side: note where start lives in this pseudo-process. */
+static void ios_xps_note( PRTL_THREAD_START_ROUTINE start )
+{
+    LDR_DATA_TABLE_ENTRY *mod;
+    struct ios_xps_slot *slot = NULL;
+    ULONG_PTR va = (ULONG_PTR)start, base;
+    USHORT i, len;
+    int n;
+
+    if (!ios_xps_enabled() || !start) return;
+    if (!(mod = ios_xps_module_for_va( NtCurrentTeb()->Peb, va ))) return;
+    base = (ULONG_PTR)mod->DllBase;
+    len = mod->BaseDllName.Length / sizeof(WCHAR);
+    if (!mod->BaseDllName.Buffer || !len || len >= ARRAY_SIZE(slot->module)) return;
+
+    ios_xps_lock_take();
+    for (n = 0; n < IOS_XPS_SLOTS && !slot; n++)
+        if (!ios_xps_slots[n].func || ios_xps_slots[n].func == va) slot = &ios_xps_slots[n];
+    if (!slot) slot = &ios_xps_slots[0]; /* oldest notes are stale by now */
+    if (!slot->func) __sync_add_and_fetch( &ios_xps_pending, 1 );
+    slot->func = va;
+    slot->rva = va - base;
+    slot->creator = NtCurrentTeb()->Peb;
+    for (i = 0; i < len; i++) slot->module[i] = mod->BaseDllName.Buffer[i];
+    slot->module[len] = 0;
+    if (!ios_xps_export_name( base, slot->rva, slot->export, sizeof(slot->export) )) slot->export[0] = 0;
+    dprintf( 2, "[xproc-start] noted start=%p = %s!%s +0x%lx (creator peb=%p)\n", (void *)va,
+             debugstr_w(slot->module), slot->export[0] ? slot->export : "(rva)",
+             (unsigned long)slot->rva, NtCurrentTeb()->Peb );
+    ios_xps_lock_drop();
+}
+
+/* Target side, from NtContinueEx: move an entry that names another pseudo-process's
+ * module copy to this one's. entry is RtlUserThreadStart's first argument (X0). */
+void ios_xps_fixup_entry( ULONG_PTR *entry )
+{
+    struct ios_xps_slot found;
+    LDR_DATA_TABLE_ENTRY *mod;
+    ULONG_PTR va, target;
+    PEB *peb;
+    int n, hit = -1;
+
+    if (!ios_xps_pending || !entry || !(va = *entry)) return;
+    peb = NtCurrentTeb()->Peb;
+    ios_xps_lock_take();
+    /* the creator's own threads may continue at the same address: only another process consumes */
+    for (n = 0; n < IOS_XPS_SLOTS; n++)
+        if (ios_xps_slots[n].func == va && ios_xps_slots[n].creator != peb) { hit = n; break; }
+    if (hit >= 0)
+    {
+        found = ios_xps_slots[hit];
+        memset( &ios_xps_slots[hit], 0, sizeof(ios_xps_slots[hit]) );
+        __sync_sub_and_fetch( &ios_xps_pending, 1 );
+    }
+    ios_xps_lock_drop();
+    if (hit < 0) return;
+
+    if (ios_xps_module_for_va( peb, va ))
+    {
+        /* the address is this process's own code (same pseudo-process, or a shared image) */
+        dprintf( 2, "[xproc-start] entry=%p already in this process (peb=%p): kept\n", (void *)va, peb );
+        return;
+    }
+    if (!(mod = ios_xps_module_by_name( peb, found.module )))
+    {
+        dprintf( 2, "[xproc-start] entry=%p: %s not loaded in peb=%p: kept\n", (void *)va,
+                 debugstr_w(found.module), peb );
+        return;
+    }
+    target = 0;
+    if (found.export[0]) target = ios_xps_export_va( (ULONG_PTR)mod->DllBase, found.export );
+    if (!target && found.rva < mod->SizeOfImage) target = (ULONG_PTR)mod->DllBase + found.rva;
+    if (!target) return;
+    dprintf( 2, "[xproc-start] entry %p -> %p = %s!%s in peb=%p (the creator's copy -> this process's)\n",
+             (void *)va, (void *)target, debugstr_w(found.module),
+             found.export[0] ? found.export : "(rva)", peb );
+    *entry = target;
+}
+
 /***********************************************************************
  *              NtCreateThreadEx   (NTDLL.@)
  */
@@ -1692,6 +1919,7 @@ NTSTATUS WINAPI NtCreateThreadEx( HANDLE *handle, ACCESS_MASK access, OBJECT_ATT
         union apc_call call;
         union apc_result result;
 
+        ios_xps_note( start );
         memset( &call, 0, sizeof(call) );
 
         call.create_thread.type      = APC_CREATE_THREAD;

@@ -3724,6 +3724,9 @@ NTSTATUS WINAPI NtContinueEx( CONTEXT *context, KCONTINUE_ARGUMENT *args )
     BOOL alertable;
 #ifdef WINE_IOS
     { extern void ios_tlswatch_rearm( const char * ); ios_tlswatch_rearm( "NtContinue" ); }
+    /* [xproc-start] a remote thread's entry (X0 for RtlUserThreadStart) in this process's
+     * own module copy (thread_ios.c) */
+    { extern void ios_xps_fixup_entry( ULONG_PTR *entry ); ios_xps_fixup_entry( (ULONG_PTR *)&context->X[0] ); }
 #endif
 
     if ((UINT_PTR)args > 0xff)

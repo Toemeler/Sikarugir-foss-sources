@@ -658,6 +658,57 @@ enum GameRecommendations {
         metalFXUpscale: 2, controllerMode: "keys", cpuCount: 4, program: "PLAY MADEIRA.exe",
         storeAppID: 1245620, handPrograms: ["eldenring.exe"])
 
+    /// Elden Ring through the Seamless Co-op mod's ersc_launcher.exe (owner's request,
+    /// 2026-10-20): exactly the owner's "ELDEN RING (SSD, ERSC, Optimized)" entry on the
+    /// iPad Pro M4 13" (game on the external SSD, D:). Its config file's effective lines
+    /// (the last line of each key it set twice; build 74's [game-cfg] line names the same
+    /// values), then the three lines of the owner's madeira.cfg the launcher needs:
+    /// local-write (its WriteProcessMemory of ersc.dll's path into the game),
+    /// MADEIRA_SMC_HOST_PAGE (Themida's ersc.dll rewrites its own code) and the GDI shared
+    /// section. The entry's switches as they were: AVX, NVIDIA and Wine's C++ runtime off,
+    /// fast synchronization, 30 FPS, 800x600 filled, MetalFX 2x, a controller as keyboard
+    /// and mouse, 4 processors; added by hand, ersc_launcher.exe starts with Steam running
+    /// (Madeira Dock), as it did.
+    static let eldenRingSeamlessCoop = GameRecommendation(
+        id: "elden-ring-ersc", title: "Elden Ring (Seamless Co-op)", version: 1,
+        config: """
+        # Madeira's recommended settings for Elden Ring through the Seamless Co-op launcher (measured on the iPad Pro M4 13").
+        # Reset to Recommended, at the bottom of the game's settings, brings them back.
+        swap-mb = 6144
+        swap-mode = 2
+        swap-min-mb = 8
+        vram-mb = 1024
+        avail-phys = 1
+        pso-lazy-libs = 1
+        msc-unbounded-retry = 1
+        msc-fail-memo = 1
+        pso-placeholder = 1
+        quiet-log = 1
+        env.MADEIRA_LOCK_ORPHAN = stamped
+        env.MADEIRA_EC_HOOK_TRACE = 0
+        ring-share = 1
+        pso-lazy = 1
+        env.MADEIRA_CPU_COUNT = 9
+        env.MADEIRA_FPS_CAP = 30
+        env.WINEDLLOVERRIDES = dinput8=n,b;oo2core_6_win64=b
+        pso-warm = 2
+        env.MADEIRA_EXE_PATCH = eldenring.exe:744f458b94cc:0:eb
+        env.FEX_EXTENDEDVOLATILEMETADATA = oo2core_6_win64.dll
+        env.MADEIRA_OODLE_NATIVE = 1
+        env.MADEIRA_SWAP_ANON_RESV = 1024#1,1024#2,1024#3
+        env.MADEIRA_LEAN_DIAG = 1
+        metalfx-upscale = 2
+        ui-scale = 3.44
+        ui-scale-serials = 14,15,16,708,709,710
+        ui-hud-43 = 16,710
+        env.MADEIRA_GDI_SHARED_SECTION = 1
+        local-write = 1
+        env.MADEIRA_SMC_HOST_PAGE = 1
+        """,
+        avx: false, nvidia: false, wineVCRT: false, fastSync: true, fpsMode: 3, resolution: "800x600",
+        display: "fill", metalFXUpscale: 2, controllerMode: "keys", cpuCount: 4,
+        storeAppID: 1245620, handPrograms: ["ersc_launcher.exe"])
+
     /// Raft (Unity, Direct3D 11 through DXMT) for an 8 GB iPad Pro M4 (owner's
     /// request, 2026-10-15). Not device-tested yet: every line is one the owner
     /// approved. A 4 GB swap file (broad, from 1 MB; the game asks for 4 GB of RAM),
@@ -749,7 +800,7 @@ enum GameRecommendations {
         """)
 
     static let all = [rdr2Steam, rdr2Other, gta5EnhancedSteam, gta5EnhancedOther, ghostOfTsushima, godOfWar, horizonZeroDawn,
-                      eldenRing, raft, littleNightmaresEE, standard]
+                      eldenRing, eldenRingSeamlessCoop, raft, littleNightmaresEE, standard]
 
     // MARK: Recognising a game
 
@@ -801,10 +852,12 @@ enum GameRecommendations {
             return godOfWar
         case "horizonzerodawn.exe":
             return horizonZeroDawn
-        case "eldenring.exe", "ersc_launcher.exe", "play madeira.exe", "play_madeira.exe":
-            // The game, the Seamless Co-op mod's launcher beside it, which starts it, or
-            // PLAY MADEIRA.exe, which uses less memory.
+        case "eldenring.exe", "play madeira.exe", "play_madeira.exe":
+            // The game, or PLAY MADEIRA.exe, which uses less memory.
             return eldenRing
+        case "ersc_launcher.exe":
+            // The Seamless Co-op mod's launcher beside the game, which starts it.
+            return eldenRingSeamlessCoop
         case "raft.exe":
             return raft
         default:

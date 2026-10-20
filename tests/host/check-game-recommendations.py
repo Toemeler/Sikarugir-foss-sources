@@ -65,9 +65,9 @@ for m in re.finditer(r'static let (\w+) = GameRecommendation\(\n\s*id: "([^"]+)"
     lines = [line[len(indent):] if line.startswith(indent) else line for line in body.split('\n')]
     presets[ident] = dict(name=name, title=title, version=int(version), lines=lines, switches=' '.join((switches or '').split()))
 assert set(presets) == {'rdr2-steam', 'rdr2-other', 'gta5e-steam', 'gta5e-other', 'ghost-of-tsushima', 'god-of-war',
-                        'horizon-zero-dawn', 'elden-ring', 'raft', 'little-nightmares-ee', 'standard'}, sorted(presets)
+                        'horizon-zero-dawn', 'elden-ring', 'elden-ring-ersc', 'raft', 'little-nightmares-ee', 'standard'}, sorted(presets)
 assert ('static let all = [rdr2Steam, rdr2Other, gta5EnhancedSteam, gta5EnhancedOther, ghostOfTsushima, godOfWar, horizonZeroDawn,\n'
-        '                      eldenRing, raft, littleNightmaresEE, standard]') in lists_src
+        '                      eldenRing, eldenRingSeamlessCoop, raft, littleNightmaresEE, standard]') in lists_src
 
 # madeira-bcd's defaults where upstream's differ: every game madeira-bcd ran had them,
 # so every game's own list ends with them. The standard list reaches every other game
@@ -77,7 +77,7 @@ FORK_DEFAULTS = ["# madeira-bcd's defaults, which this list was tested with (ups
                  'env.MADEIRA_FREE_DELAY_MS = 2000', 'env.MADEIRA_CTX_CPU_AREA = 2', 'env.MADEIRA_WAIT_CHILDREN = 1',
                  'env.MADEIRA_JIT_DUMP = 0']
 for ident, p in presets.items():
-    if ident in ('standard', 'elden-ring', 'raft', 'little-nightmares-ee'):
+    if ident in ('standard', 'elden-ring', 'elden-ring-ersc', 'raft', 'little-nightmares-ee'):
         assert not set(FORK_DEFAULTS) & set(p['lines']), (ident, "this list has none of madeira-bcd's defaults")
         p['tested'], p['fork'] = p['lines'][2:], []
         continue
@@ -106,7 +106,7 @@ for ident, p in presets.items():
         if key != 'env.WINEDLLOVERRIDES':
             named = named.replace('socialclubhelper.exe', '')
         assert 'socialclub' not in named and 'MADEIRA_DLL_LOCAL' not in line, (ident, line)
-print('PASS: eleven lists, two comment lines each, every game list but Elden Ring\'s, Raft\'s and Little Nightmares EE\'s ends with the four fork defaults and the standard one has none, no key twice, '
+print('PASS: twelve lists, two comment lines each, every game list but Elden Ring\'s, Raft\'s and Little Nightmares EE\'s ends with the four fork defaults and the standard one has none, no key twice, '
       'every non-env key in the settings catalog, no Social Club DLL lines, no variant DLL switches')
 
 # Red Dead Redemption 2 from Steam: the owner's list of 2026-10-09 (build 463), line for line,
@@ -242,15 +242,16 @@ assert hzd['tested'] == ['dxbc-register-spaces = 1', 'msc-unbounded-retry = 1', 
                             'env.MADEIRA_LOCK_ORPHAN = stamped', 'env.MADEIRA_SRV_FGETPATH = 1',
                             'env.WINEDEBUG = fixme-input'], hzd['lines']
 er = presets['elden-ring']
+ersc = presets['elden-ring-ersc']
 assert not any(line.startswith(('quiet-log', 'env.MADEIRA_SRV_FGETPATH'))
-               for p in presets.values() if p is not hzd and p is not er for line in p['lines']), \
+               for p in presets.values() if p is not hzd and p is not er and p is not ersc for line in p['lines']), \
     'the build 494 switches are Horizon Zero Dawn\'s only (and quiet-log Elden Ring\'s, below)'
 assert hzd['version'] == 16 and hzd['switches'] == 'avx: false, nvidia: false, wineVCRT: false, fastSync: true, display: "fit"', hzd
 assert not any(line.startswith(('d3d12-wave-ops', 'd3d12-raw-typed-views', 'typed-uav-atomic', 'ignore-volatile-metadata',
                                  'env.FEX_MEMCPYSETTSOENABLED', 'env.FEX_STRICTINPROCESSSPLITLOCKS'))
                for p in presets.values() for line in p['lines']), 'the build 484 experiment is in no list'
 assert not any(line.startswith(('pso-lazy-libs', 'clear-rects'))
-               for p in presets.values() if p is not hzd and p is not er for line in p['lines']), \
+               for p in presets.values() if p is not hzd and p is not er and p is not ersc for line in p['lines']), \
     'the build 481 switches are Horizon Zero Dawn\'s only (and pso-lazy-libs Elden Ring\'s, below)'
 # Elden Ring, version 1 (owner's request, 2026-10-15): for an 8 GB iPad Pro M4, offline or through the
 # Seamless Co-op launcher; not device-tested yet. Every line the owner approved, from the memory-bound
@@ -281,13 +282,13 @@ assert not any(line.startswith(('local-write', 'env.MADEIRA_SMC_HOST_PAGE')) for
     'version 10 has neither local-write nor the host-page SMC switch'
 assert (root / 'madeira-oodle' / 'src' / 'oo2core_shim.cpp').is_file(), 'the native Oodle builtin the list names'
 # Version 3: local-write = 1 (the Seamless Co-op launcher's WriteProcessMemory into the game), Elden Ring's only.
-assert not any(line.startswith('local-write') for p in presets.values() if p is not er for line in p['lines']), "local-write is Elden Ring's only"
+assert not any(line.startswith('local-write') for p in presets.values() if p is not er and p is not ersc for line in p['lines']), "local-write is Elden Ring's only"
 assert not any(line.startswith('clear-rects') for line in er['lines']), 'Elden Ring has no clear-rects'
 # Version 2 (owner's request, 2026-10-16): the Steam game starts PLAY MADEIRA.exe when its folder has it (less memory).
 # Version 4 (owner's request, 2026-10-16): 800x600 (4:3, as the game starts), MetalFX 2x, Fit on a 4:3 iPad.
 # Version 5 (owner's request, 2026-10-16): FEX traps self-modifying writes per 16 KB host page (Themida's ersc.dll),
 # Elden Ring's only: it invalidates four times the code per fault, which other games should not pay.
-assert not any(line.startswith('env.MADEIRA_SMC_HOST_PAGE') for p in presets.values() if p is not er for line in p['lines']),     "the host-page SMC switch is Elden Ring's only"
+assert not any(line.startswith('env.MADEIRA_SMC_HOST_PAGE') for p in presets.values() if p is not er and p is not ersc for line in p['lines']),     "the host-page SMC switch is Elden Ring's only"
 assert (root / 'build' / 'fex-arm64ec' / 'patches' / '0001-smc-host-page.patch').is_file(), 'the FEX patch the switch needs'
 # Version 6 (owner's request, 2026-10-16): 960x540 and Fill. The game draws 16:9 in any window (800x452 with
 # bars at 800x600), so a 16:9 monitor filled to the 4:3 iPad has no bars and no distortion.
@@ -296,7 +297,16 @@ assert (root / 'build' / 'fex-arm64ec' / 'patches' / '0001-smc-host-page.patch')
 assert er['version'] == 10 and er['switches'] == ('wineVCRT: false, fastSync: true, fpsMode: 3, resolution: "800x600", '
                                                   'display: "fill", metalFXUpscale: 2, controllerMode: "keys", cpuCount: 4, '
                                                   'program: "PLAY MADEIRA.exe", storeAppID: 1245620, handPrograms: ["eldenring.exe"]'), er
-assert not any('controllerMode:' in p['switches'] for p in presets.values() if p is not er), "other games keep their controller mode"
+assert not any('controllerMode:' in p['switches'] for p in presets.values() if p is not er and p is not ersc), "other games keep their controller mode"
+# Elden Ring through the Seamless Co-op launcher, version 1 (owner's request, 2026-10-20): exactly the owner's
+# "ELDEN RING (SSD, ERSC, Optimized)" entry: its config file's effective lines (build 74's [game-cfg] line names the
+# same values), then the madeira.cfg lines the launcher needs, and the entry's switches; added by hand,
+# ersc_launcher.exe starts with Steam running.
+assert ersc['tested'] == ['swap-mb = 6144', 'swap-mode = 2', 'swap-min-mb = 8', 'vram-mb = 1024', 'avail-phys = 1', 'pso-lazy-libs = 1', 'msc-unbounded-retry = 1', 'msc-fail-memo = 1', 'pso-placeholder = 1', 'quiet-log = 1', 'env.MADEIRA_LOCK_ORPHAN = stamped', 'env.MADEIRA_EC_HOOK_TRACE = 0', 'ring-share = 1', 'pso-lazy = 1', 'env.MADEIRA_CPU_COUNT = 9', 'env.MADEIRA_FPS_CAP = 30', 'env.WINEDLLOVERRIDES = dinput8=n,b;oo2core_6_win64=b', 'pso-warm = 2', 'env.MADEIRA_EXE_PATCH = eldenring.exe:744f458b94cc:0:eb', 'env.FEX_EXTENDEDVOLATILEMETADATA = oo2core_6_win64.dll', 'env.MADEIRA_OODLE_NATIVE = 1', 'env.MADEIRA_SWAP_ANON_RESV = 1024#1,1024#2,1024#3', 'env.MADEIRA_LEAN_DIAG = 1', 'metalfx-upscale = 2', 'ui-scale = 3.44', 'ui-scale-serials = 14,15,16,708,709,710', 'ui-hud-43 = 16,710', 'env.MADEIRA_GDI_SHARED_SECTION = 1', 'local-write = 1', 'env.MADEIRA_SMC_HOST_PAGE = 1'], ersc['lines']
+assert ersc['version'] == 1 and ersc['switches'] == ('avx: false, nvidia: false, wineVCRT: false, fastSync: true, fpsMode: 3, '
+                                                     'resolution: "800x600", display: "fill", metalFXUpscale: 2, '
+                                                     'controllerMode: "keys", cpuCount: 4, storeAppID: 1245620, '
+                                                     'handPrograms: ["ersc_launcher.exe"]'), ersc
 assert not any('program:' in p['switches'] for p in presets.values() if p is not er), "a program is Elden Ring's only"
 fields = block(apply_src, '    private static func takeEntryFields(', '\n    }\n')
 assert 'if let program = rec.program { entry.takeRecommendedProgram(program) }' in fields
@@ -353,7 +363,8 @@ assert 'case "ghostoftsushima.exe":' in match and 'case "gow.exe":' in match and
 assert 'case "horizonzerodawn.exe":\n            return horizonZeroDawn' in match
 assert 'if steamAppID == horizonZeroDawnAppID || installFolder == "horizon zero dawn" { return horizonZeroDawn }' in match
 assert 'if steamAppID == eldenRingAppID || installFolder == "elden ring" { return eldenRing }' in match
-assert 'case "eldenring.exe", "ersc_launcher.exe", "play madeira.exe", "play_madeira.exe":' in match and 'return eldenRing' in match
+assert 'case "eldenring.exe", "play madeira.exe", "play_madeira.exe":' in match and 'return eldenRing' in match
+assert 'case "ersc_launcher.exe":' in match and 'return eldenRingSeamlessCoop' in match
 assert 'if steamAppID == raftAppID || installFolder == "raft" { return raft }' in match
 assert 'case "raft.exe":\n            return raft' in match
 # Little Nightmares Enhanced Edition by its App ID only: its program's name is not known yet.
@@ -541,9 +552,9 @@ check(id(steam + #"\Horizon Zero Dawn"#, 1151640) == "horizon-zero-dawn", "Horiz
 check(id(#"C:\Games\Horizon Zero Dawn Remastered\HorizonZeroDawnRemastered.exe"#) == "none", "the remaster is another game")
 let elden = steam + #"\ELDEN RING"#
 check(id(elden, 1245620) == "elden-ring" && id(elden) == "elden-ring", "Elden Ring by its App ID or Steam folder")
-check(id(elden + #"\Game\eldenring.exe"#) == "elden-ring" && id(elden + #"\Game\ersc_launcher.exe"#) == "elden-ring",
+check(id(elden + #"\Game\eldenring.exe"#) == "elden-ring" && id(elden + #"\Game\ersc_launcher.exe"#) == "elden-ring-ersc",
       "Elden Ring's program and the Seamless Co-op launcher inside Steam")
-check(id(#"C:\Games\Elden Ring\Game\ERSC_LAUNCHER.EXE"#) == "elden-ring" && id(#"C:\ER\eldenring.exe"#) == "elden-ring",
+check(id(#"C:\Games\Elden Ring\Game\ERSC_LAUNCHER.EXE"#) == "elden-ring-ersc" && id(#"C:\ER\eldenring.exe"#) == "elden-ring",
       "outside Steam, in any case")
 check(id(elden + #"\Game\start_protected_game.exe"#) == "none", "the anti-cheat starter is not the game")
 check(id(elden + #"\Game\PLAY MADEIRA.exe"#) == "elden-ring" && id(#"C:\ER\play madeira.EXE"#) == "elden-ring",
