@@ -1,0 +1,35 @@
+diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
+index 5b86e9e..f94b3f1 100644
+--- a/Source/Windows/ARM64EC/Module.cpp
++++ b/Source/Windows/ARM64EC/Module.cpp
+@@ -336,6 +336,17 @@ FrontendThreadData* GetFrontendThreadData(FEXCore::Core::InternalThreadState* Th
+   return static_cast<FrontendThreadData*>(Thread->FrontendPtr);
+ }
+ 
++// The guest exceptions HandleGuestException makes from a trap (the instruction has completed) rather than a fault.
++static bool IsGuestTrapException(DWORD Code) {
++  switch (Code) {
++  case EXCEPTION_SINGLE_STEP:
++  case EXCEPTION_BREAKPOINT:
++  case EXCEPTION_INT_OVERFLOW:
++  case STATUS_STACK_BUFFER_OVERRUN: return true;
++  default: return false;
++  }
++}
++
+ // Drops the entries of handlers that are no longer running: those below Rsp on the guest stack, and with
+ // Inclusive, one at Rsp itself.
+ static void DropGuestExceptionEFlags(FrontendThreadData* Data, uint64_t Rsp, bool Inclusive) {
+@@ -1525,6 +1536,12 @@ bool ResetToConsistentStateImpl(const ThreadCPUArea CPUArea, EXCEPTION_RECORD* E
+       const auto& Top = Data->ExceptionEFlags[Data->ExceptionEFlagsCount - 1];
+       if (GuestContext->Rsp == Top.Rsp && GuestContext->Rip == Top.Rip) {
+         GuestContext->EFlags = (GuestContext->EFlags & ~GuestOnlyEFlagsMask) | Top.EFlags;
++        // Madeira: a fault's context has RF set, as the CPU pushes it for every fault but an instruction breakpoint
++        // (measured on Windows 10: an access violation's context EFlags 0x10202, tests/x64/tfstep-x64.c "fault").
++        // Traps (single step, INT3, INTO) leave it clear. RF itself is not carried back into the guest.
++        if (!IsGuestTrapException(Exception->ExceptionCode)) {
++          GuestContext->EFlags |= 1U << 16;
++        }
+       }
+     }
+     LogMan::Msg::DFmt("Passing through exception");

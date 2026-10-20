@@ -20,6 +20,8 @@ B="$R/FEX/build-arm64ec"
 #   0001-smc-host-page  SMC write traps per 16 KB host page (MADEIRA_SMC_HOST_PAGE=1)
 #   0002-single-step-like-hardware  trap-flag single steps and guest exception EFlags as
 #                       x64 Windows delivers them (tests/x64/tfstep-x64.c)
+#   0003-fault-resume-flag  RF set in a fault's exception context, as x64 Windows gives it
+#                       (tests/x64/tfstep-x64.c "fault")
 for P in "$R"/build/fex-arm64ec/patches/*.patch; do
     [ -e "$P" ] || continue
     if git -C "$R/FEX" apply --reverse --check "$P" 2>/dev/null; then
