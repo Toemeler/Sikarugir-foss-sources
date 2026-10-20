@@ -14,6 +14,19 @@ R="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TC="$R/toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin"
 export PATH="$TC:$PATH"
 B="$R/wine/build-arm64ec"
+# Madeira's own changes to the pinned Wine's ntdll, kept here rather than in the
+# submodule (patches/, applied in name order; one already applied is left as it is):
+#   0001-arm64ec-x64-debug-registers  the x64 debug registers a guest sets through a
+#                       context come back in its exception contexts (tests/x64/tfstep-x64.c "drrt")
+for P in "$R"/build/wine-pe/patches/*.patch; do
+    [ -e "$P" ] || continue
+    if git -C "$R/wine" apply --reverse --check "$P" 2>/dev/null; then
+        echo "Wine patch already applied: $(basename "$P")"
+    else
+        git -C "$R/wine" apply "$P"
+        echo "Wine patch applied: $(basename "$P")"
+    fi
+done
 if [ ! -f "$B/config.status" ]; then
     mkdir -p "$B" && cd "$B" && ../configure --enable-archs=arm64ec --without-x --disable-tests --enable-winegstreamer
 fi

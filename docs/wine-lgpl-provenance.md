@@ -121,3 +121,8 @@ signed off under the DCO (the fork's `CONTRIBUTING.md`):
   keep-delegates for Wine Mono (000cac48452, pull request #26, merged as
   2790f7c2a5d); Madeira's follow-up bfa3a472397 builds it for i386 only and
   puts the variables back once Mono has read them.
+- 2026-10-20 author Toemeler: ntdll ARM64EC: the x64 debug registers a guest
+  sets through a context come back in its exception contexts. Not a commit in
+  the fork: the shipped arm64ec-windows/ntdll.dll is the pinned wine (9129e9684da)
+  plus build/wine-pe/patches/0001-arm64ec-x64-debug-registers.patch, which
+  build/wine-pe/build-ntdll.sh applies.

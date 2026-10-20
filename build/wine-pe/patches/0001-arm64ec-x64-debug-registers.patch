@@ -1,0 +1,119 @@
+diff --git a/dlls/ntdll/signal_arm64ec.c b/dlls/ntdll/signal_arm64ec.c
+index 2a1333f..6fe78c5 100644
+--- a/dlls/ntdll/signal_arm64ec.c
++++ b/dlls/ntdll/signal_arm64ec.c
+@@ -78,6 +78,70 @@ static inline CHPE_V2_CPU_AREA_INFO *get_arm64ec_cpu_area(void)
+     return NtCurrentTeb()->ChpeV2CpuAreaInfo;
+ }
+ 
++/* iOS-Madeira: THE X64 DEBUG REGISTERS A GUEST SETS THROUGH A CONTEXT.
++ *
++ * An ARM64EC context has no room for Dr0-3/Dr6/Dr7: context_x64_to_arm() drops them
++ * and context_arm_to_x64() zeroes them, and no context carried
++ * CONTEXT_AMD64_DEBUG_REGISTERS. So a copy protection's exception handler (Seamless
++ * Co-op's ersc.dll, Themida) that writes Dr0-3/Dr7 into its context found them gone at
++ * the next exception, and saw ContextFlags 0010000b where Windows gives 0010005f
++ * (tests/x64/tfstep-x64.c "drrt").
++ *
++ * They are kept per thread behind TEB->BStoreLimit (IA64 only, unused on 64-bit), set
++ * by NtContinue/NtContinueEx and NtSetContextThread on the current thread, and given
++ * back in every exception context and by NtGetContextThread on the current thread.
++ * As measured on Windows 10: Dr0-3 read back as 0 while Dr7 enables none of them, and
++ * an armed Dr7 reads back with bit 10 set. They are only stored: no hardware
++ * breakpoint fires. */
++struct x64_debug_regs { DWORD64 dr0, dr1, dr2, dr3, dr6, dr7; };
++
++static struct x64_debug_regs *get_x64_debug_regs( BOOL create )
++{
++    struct x64_debug_regs *regs = NtCurrentTeb()->BStoreLimit;
++
++    if (!regs && create)
++    {
++        regs = RtlAllocateHeap( NtCurrentTeb()->Peb->ProcessHeap, HEAP_ZERO_MEMORY, sizeof(*regs) );
++        NtCurrentTeb()->BStoreLimit = regs;
++    }
++    return regs;
++}
++
++static void save_x64_debug_regs( const CONTEXT *context )
++{
++    struct x64_debug_regs *regs;
++    DWORD64 dr7 = context->Dr7;
++
++    if ((context->ContextFlags & CONTEXT_AMD64_DEBUG_REGISTERS) != CONTEXT_AMD64_DEBUG_REGISTERS) return;
++    if (!(regs = get_x64_debug_regs( dr7 != 0 ))) return;
++    if (dr7 & 0xff)
++    {
++        regs->dr0 = context->Dr0;
++        regs->dr1 = context->Dr1;
++        regs->dr2 = context->Dr2;
++        regs->dr3 = context->Dr3;
++    }
++    else regs->dr0 = regs->dr1 = regs->dr2 = regs->dr3 = 0;
++    regs->dr6 = context->Dr6;
++    regs->dr7 = dr7 ? dr7 | 0x400 : 0;
++}
++
++/* For a context context_arm_to_x64() just built (Dr0-7 zero): also the segment
++ * registers it fills in, as Windows marks them. */
++static void load_x64_debug_regs( CONTEXT *context )
++{
++    const struct x64_debug_regs *regs = get_x64_debug_regs( FALSE );
++
++    context->ContextFlags |= CONTEXT_AMD64_SEGMENTS | CONTEXT_AMD64_DEBUG_REGISTERS;
++    if (!regs) return;
++    context->Dr0 = regs->dr0;
++    context->Dr1 = regs->dr1;
++    context->Dr2 = regs->dr2;
++    context->Dr3 = regs->dr3;
++    context->Dr6 = regs->dr6;
++    context->Dr7 = regs->dr7;
++}
++
+ /* iOS-Madeira ml617: THE GUEST-STACK WINDOW FOR ONE UNWIND.
+  *
+  * ml616 fabricated 24,576 unwind frames and then terminated the process with
+@@ -1352,6 +1416,7 @@ NTSTATUS SYSCALL_API NtContinue( CONTEXT *context, BOOLEAN alertable )
+ {
+     ARM64_NT_CONTEXT arm_ctx;
+ 
++    save_x64_debug_regs( context );
+     context_x64_to_arm( &arm_ctx, (ARM64EC_NT_CONTEXT *)context );
+     return syscall_NtContinue( &arm_ctx, alertable );
+ }
+@@ -1360,6 +1425,7 @@ NTSTATUS SYSCALL_API NtContinueEx( CONTEXT *context, KCONTINUE_ARGUMENT *args )
+ {
+     ARM64_NT_CONTEXT arm_ctx;
+ 
++    save_x64_debug_regs( context );
+     context_x64_to_arm( &arm_ctx, (ARM64EC_NT_CONTEXT *)context );
+     return syscall_NtContinueEx( &arm_ctx, args );
+ }
+@@ -1793,9 +1859,11 @@ NTSTATUS SYSCALL_API NtFreeVirtualMemory( HANDLE process, PVOID *addr_ptr, SIZE_
+ NTSTATUS SYSCALL_API NtGetContextThread( HANDLE handle, CONTEXT *context )
+ {
+     ARM64_NT_CONTEXT arm_ctx = { .ContextFlags = ctx_flags_x64_to_arm( context->ContextFlags ) };
++    BOOL want_dr = (context->ContextFlags & CONTEXT_AMD64_DEBUG_REGISTERS) == CONTEXT_AMD64_DEBUG_REGISTERS;
+     NTSTATUS status = syscall_NtGetContextThread( handle, &arm_ctx );
+ 
+     if (!status) context_arm_to_x64( (ARM64EC_NT_CONTEXT *)context, &arm_ctx );
++    if (!status && want_dr && handle == NtCurrentThread()) load_x64_debug_regs( context );
+ 
+     /* ml715: WHAT THE CALLER ACTUALLY RECEIVES.
+      *
+@@ -2281,6 +2349,7 @@ NTSTATUS SYSCALL_API NtSetContextThread( HANDLE handle, const CONTEXT *context )
+ {
+     ARM64_NT_CONTEXT arm_ctx;
+ 
++    if (handle == NtCurrentThread()) save_x64_debug_regs( context );
+     context_x64_to_arm( &arm_ctx, (ARM64EC_NT_CONTEXT *)context );
+     return syscall_NtSetContextThread( handle, &arm_ctx );
+ }
+@@ -3559,6 +3628,7 @@ static void * __attribute__((used)) prepare_exception_arm64ec( EXCEPTION_RECORD
+ {
+     if (rec->ExceptionCode == STATUS_EMULATION_SYSCALL) dispatch_syscall( arm_ctx );
+     context_arm_to_x64( context, arm_ctx );
++    load_x64_debug_regs( &context->AMD64_Context );
+     /* iOS-Madeira task#34 probe: FEX's LogMan output is invisible on iOS (its
+      * write(2) resolves to the PE CRT's WriteFile → unplumbed std handle),
+      * so trace the guest-exception conversion from the wine side. Rate-

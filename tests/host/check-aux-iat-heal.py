@@ -65,6 +65,10 @@ c0, c1 = struct.unpack_from('<II', k32_img, 0x2b300)
 assert (c0 & 0x9F00001F) == 0x9000000B and (c1 & 0xFFC003FF) == 0xF940016B, 'continuation shape'
 assert ntd_img[0x92090:0x9209a] == bytes.fromhex('488bc448895820555de9'), 'RtlQueryPerformanceCounter FFS'
 assert ntd_img[0x920a0:0x920aa] == bytes.fromhex('488bc448895820555de9'), 'RtlQueryPerformanceFrequency FFS'
+# the EC functions themselves: where each FFS's final jmp rel32 leads (they move when ntdll is rebuilt)
+qpc_rva = 0x9209e + struct.unpack_from('<i', ntd_img, 0x9209a)[0]
+qpf_rva = 0x920ae + struct.unpack_from('<i', ntd_img, 0x920aa)[0]
+assert ntd_text[0] <= qpc_rva < ntd_text[0] + ntd_text[1] and ntd_text[0] <= qpf_rva < ntd_text[0] + ntd_text[1], 'FFS targets in .text'
 
 begin = virtual.index('/* madeira-bcd: aux-IAT heal (begin).')
 heal = virtual[begin:virtual.index('/* madeira-bcd: aux-IAT heal (end) */', begin)]
@@ -133,7 +137,7 @@ int main( int argc, char **argv )
     unsigned char *k32 = malloc( K32_SIZE ), *ntd = malloc( NTD_SIZE );
     FILE *f;
     int fd = memfd_create( "pool", 0 );
-    uintptr_t qpc = PE_NTD + 0x71aac, qpf = PE_NTD + 0x71d04;
+    uintptr_t qpc = PE_NTD + QPC_RVA, qpf = PE_NTD + QPF_RVA;
     if (fd < 0 || ftruncate( fd, POOL_SIZE )) return 2;
     rw_view = mmap( NULL, POOL_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0 );
     rx_view = mmap( NULL, POOL_SIZE, PROT_READ, MAP_SHARED, fd, 0 );   /* writes through it fault */
@@ -149,52 +153,52 @@ int main( int argc, char **argv )
     if (argc > 3)   /* MADEIRA_AUX_IAT_HEAL=0 run */
     {
         reset( k32, ntd, 0 );
-        CHECK( !ios_jit_heal_aux_iat( qpc, K32_COPY + 0x25750, PEB_A, NTD_COPY + 0x71aac ) );
+        CHECK( !ios_jit_heal_aux_iat( qpc, K32_COPY + 0x25750, PEB_A, NTD_COPY + QPC_RVA ) );
         CHECK( rd64( K32_COPY + 0x6d0e0 ) == K32_COPY + 0x2b300 );
         if (!fails) puts( "PASS: MADEIRA_AUX_IAT_HEAL=0 leaves the slot" );
         return fails != 0;
     }
 
     reset( k32, ntd, 1 );
-    CHECK( (uintptr_t)ios_jit_translate_addr_for_owner( (void *)qpc, PEB_A ) == NTD_COPY + 0x71aac );
-    CHECK( ios_jit_heal_aux_iat( qpc, K32_COPY + 0x25750, PEB_A, NTD_COPY + 0x71aac ) == 1 );
-    CHECK( rd64( K32_COPY + 0x6d0e0 ) == NTD_COPY + 0x71aac );
-    CHECK( ios_jit_heal_aux_iat( qpf, K32_COPY + 0x25758, PEB_A, NTD_COPY + 0x71d04 ) == 1 );
-    CHECK( rd64( K32_COPY + 0x6d0e8 ) == NTD_COPY + 0x71d04 );
-    CHECK( !ios_jit_heal_aux_iat( qpc, K32_COPY + 0x25750, PEB_A, NTD_COPY + 0x71aac ) );   /* healed already */
-    CHECK( rd64( K32_COPY + 0x6d0e0 ) == NTD_COPY + 0x71aac );
+    CHECK( (uintptr_t)ios_jit_translate_addr_for_owner( (void *)qpc, PEB_A ) == NTD_COPY + QPC_RVA );
+    CHECK( ios_jit_heal_aux_iat( qpc, K32_COPY + 0x25750, PEB_A, NTD_COPY + QPC_RVA ) == 1 );
+    CHECK( rd64( K32_COPY + 0x6d0e0 ) == NTD_COPY + QPC_RVA );
+    CHECK( ios_jit_heal_aux_iat( qpf, K32_COPY + 0x25758, PEB_A, NTD_COPY + QPF_RVA ) == 1 );
+    CHECK( rd64( K32_COPY + 0x6d0e8 ) == NTD_COPY + QPF_RVA );
+    CHECK( !ios_jit_heal_aux_iat( qpc, K32_COPY + 0x25750, PEB_A, NTD_COPY + QPC_RVA ) );   /* healed already */
+    CHECK( rd64( K32_COPY + 0x6d0e0 ) == NTD_COPY + QPC_RVA );
 
     reset( k32, ntd, 1 );                                                                   /* another process's thread */
-    CHECK( !ios_jit_heal_aux_iat( qpc, K32_COPY + 0x25750, PEB_B, NTD_COPY + 0x71aac ) );
+    CHECK( !ios_jit_heal_aux_iat( qpc, K32_COPY + 0x25750, PEB_B, NTD_COPY + QPC_RVA ) );
     reset( k32, ntd, 1 );                                                                   /* the image has a second copy */
     ios_jit_mappings[2] = ios_jit_mappings[0]; ios_jit_mappings[2].owner_peb = PEB_B;
     ios_jit_mappings[2].jit_base = (void *)(NTD_COPY + NTD_SIZE_ALIGNED); ios_jit_mapping_count = 3;
-    CHECK( !ios_jit_heal_aux_iat( qpc, K32_COPY + 0x25750, PEB_A, NTD_COPY + 0x71aac ) );
+    CHECK( !ios_jit_heal_aux_iat( qpc, K32_COPY + 0x25750, PEB_A, NTD_COPY + QPC_RVA ) );
     reset( k32, ntd, 1 );                                                                   /* an owned copy of this process */
     ios_jit_mappings[0].owner_peb = PEB_A; ios_jit_mappings[0].map_peb = NULL;
-    CHECK( ios_jit_heal_aux_iat( qpc, K32_COPY + 0x25750, PEB_A, NTD_COPY + 0x71aac ) == 1 );
+    CHECK( ios_jit_heal_aux_iat( qpc, K32_COPY + 0x25750, PEB_A, NTD_COPY + QPC_RVA ) == 1 );
     reset( k32, ntd, 1 );                                                                   /* main IAT decodes elsewhere */
     CHECK( !ios_jit_heal_aux_iat( qpc + 4, K32_COPY + 0x25750, PEB_A, NTD_COPY + 0x71ab0 ) );
     CHECK( rd64( K32_COPY + 0x6d0e0 ) == K32_COPY + 0x2b300 );
     reset( k32, ntd, 1 );                                                                   /* main IAT holds the target itself */
     wr64_rw( K32_COPY + 0x510e0, qpc );
-    CHECK( ios_jit_heal_aux_iat( qpc, K32_COPY + 0x25750, PEB_A, NTD_COPY + 0x71aac ) == 1 );
+    CHECK( ios_jit_heal_aux_iat( qpc, K32_COPY + 0x25750, PEB_A, NTD_COPY + QPC_RVA ) == 1 );
     reset( k32, ntd, 1 );                                                                   /* slot holds something else */
     wr64_rw( K32_COPY + 0x6d0e0, NTD_COPY + 0x12340 );
-    CHECK( !ios_jit_heal_aux_iat( qpc, K32_COPY + 0x25750, PEB_A, NTD_COPY + 0x71aac ) );
+    CHECK( !ios_jit_heal_aux_iat( qpc, K32_COPY + 0x25750, PEB_A, NTD_COPY + QPC_RVA ) );
     CHECK( rd64( K32_COPY + 0x6d0e0 ) == NTD_COPY + 0x12340 );
     reset( k32, ntd, 1 );                                                                   /* lr - 4 is not a BL */
-    CHECK( !ios_jit_heal_aux_iat( qpc, K32_COPY + 0x25748, PEB_A, NTD_COPY + 0x71aac ) );
+    CHECK( !ios_jit_heal_aux_iat( qpc, K32_COPY + 0x25748, PEB_A, NTD_COPY + QPC_RVA ) );
     reset( k32, ntd, 1 );                                                                   /* redirect target is not the process's copy */
     CHECK( !ios_jit_heal_aux_iat( qpc, K32_COPY + 0x25750, PEB_A, NTD_COPY + 0x71ab0 ) );
     CHECK( rd64( K32_COPY + 0x6d0e0 ) == K32_COPY + 0x2b300 );
     reset( k32, ntd, 1 );                                                                   /* a stale entry still claims the copy range */
     ios_jit_mappings[2] = ios_jit_mappings[0]; ios_jit_mappings[2].pe_base = (void *)(PE_NTD + NTD_SIZE_ALIGNED * 4);
     ios_jit_mapping_count = 3;
-    CHECK( !ios_jit_heal_aux_iat( qpc, K32_COPY + 0x25750, PEB_A, NTD_COPY + 0x71aac ) );
+    CHECK( !ios_jit_heal_aux_iat( qpc, K32_COPY + 0x25750, PEB_A, NTD_COPY + QPC_RVA ) );
     reset( k32, ntd, 1 );                                                                   /* the caller's image is gone (unmapped PE) */
     ios_jit_mappings[0].pe_base = (void *)(PE_NTD + NTD_SIZE_ALIGNED * 4);
-    CHECK( !ios_jit_heal_aux_iat( qpc, K32_COPY + 0x25750, PEB_A, NTD_COPY + 0x71aac ) );
+    CHECK( !ios_jit_heal_aux_iat( qpc, K32_COPY + 0x25750, PEB_A, NTD_COPY + QPC_RVA ) );
     CHECK( rd64( K32_COPY + 0x6d0e0 ) == K32_COPY + 0x2b300 );
     reset( k32, ntd, 1 );                                                                   /* main slot outside the IAT directory */
     {
@@ -202,11 +206,11 @@ int main( int argc, char **argv )
         uint32_t lf; memcpy( &lf, pe + 0x3c, 4 );
         uint32_t save; memcpy( &save, pe + lf + 24 + 112 + 8 * 12, 4 );
         uint32_t moved = save + 0x2000; memcpy( pe + lf + 24 + 112 + 8 * 12, &moved, 4 );
-        CHECK( !ios_jit_heal_aux_iat( qpc, K32_COPY + 0x25750, PEB_A, NTD_COPY + 0x71aac ) );
+        CHECK( !ios_jit_heal_aux_iat( qpc, K32_COPY + 0x25750, PEB_A, NTD_COPY + QPC_RVA ) );
         memcpy( pe + lf + 24 + 112 + 8 * 12, &save, 4 );
     }
     reset( k32, ntd, 1 );                                                                   /* lr outside the pool */
-    CHECK( !ios_jit_heal_aux_iat( qpc, PE_K32 + 0x25750, PEB_A, NTD_COPY + 0x71aac ) );
+    CHECK( !ios_jit_heal_aux_iat( qpc, PE_K32 + 0x25750, PEB_A, NTD_COPY + QPC_RVA ) );
     if (!fails) puts( "PASS: timeGetTime's QPC/QPF stubs healed to the process's ntdll copy through the RW view; "
                       "shared or foreign copies, other targets, other slot values and non-BL calls left alone" );
     return fails != 0;
@@ -220,7 +224,7 @@ def align(x):
 defs = {
     'K32_SIZE': k32_size, 'K32_SIZE_ALIGNED': align(k32_size), 'K32_TEXT': k32_text[0], 'K32_TEXT_SIZE': k32_text[1],
     'NTD_SIZE': ntd_size, 'NTD_SIZE_ALIGNED': align(ntd_size), 'NTD_TEXT': ntd_text[0], 'NTD_TEXT_SIZE': ntd_text[1],
-    'PE_K32': 0x7e3c900000, 'PE_NTD': 0x7e42a00000,
+    'PE_K32': 0x7e3c900000, 'PE_NTD': 0x7e42a00000, 'QPC_RVA': qpc_rva, 'QPF_RVA': qpf_rva,
 }
 assert 0x10000 + defs['K32_SIZE_ALIGNED'] + 2 * defs['NTD_SIZE_ALIGNED'] <= 0x400000
 
