@@ -5663,9 +5663,28 @@ void server_init_process_done(void)
      * NtResumeThread to unsuspend the child. But since we use thread-based
      * CreateProcess, the resume mechanism may not work correctly.
      * Force suspend=0 so the child proceeds immediately. */
+    /* ml1260: honour a suspended start. The parent does resume the main thread:
+     * kernelbase resumes it after creation unless CREATE_SUSPENDED was asked for, and
+     * then the program resumes it itself (log 2026-10-19 21:49: "[srv-suspend] RESUME
+     * tid=0038 by=0024" for cmd.exe). ersc_launcher.exe starts eldenring.exe suspended,
+     * injects ersc.dll by a remote LoadLibrary thread and only then resumes it; with the
+     * override the game ran at once, held the loader lock, the inject thread timed out
+     * on it and the launcher gave up. Wait the way NtSuspendThread's self-suspend does:
+     * a zero-timeout select returns once the suspend count is 0 (at once if the resume
+     * already came). MADEIRA_CHILD_SUSPEND=0 restores the old override. */
     if (suspend)
     {
-        dprintf(STDERR_FILENO, "[Wine init_done] overriding suspend=%d → 0 for iOS\n", suspend);
+        const char *env = getenv( "MADEIRA_CHILD_SUSPEND" );
+        if (env && env[0] == '0')
+        {
+            dprintf(STDERR_FILENO, "[Wine init_done] overriding suspend=%d → 0 for iOS (MADEIRA_CHILD_SUSPEND=0)\n", suspend);
+        }
+        else
+        {
+            dprintf(STDERR_FILENO, "[Wine init_done] ml1260 suspended start: waiting for the parent's resume\n");
+            server_select( NULL, 0, SELECT_INTERRUPTIBLE, 0, NULL, NULL );
+            dprintf(STDERR_FILENO, "[Wine init_done] ml1260 resumed, starting the main thread\n");
+        }
         suspend = 0;
     }
     {
