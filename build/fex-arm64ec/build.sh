@@ -18,6 +18,8 @@ B="$R/FEX/build-arm64ec"
 # Madeira's own changes to the pinned FEX, kept here rather than in the submodule
 # (patches/, applied in name order; one already applied is left as it is):
 #   0001-smc-host-page  SMC write traps per 16 KB host page (MADEIRA_SMC_HOST_PAGE=1)
+#   0002-single-step-like-hardware  trap-flag single steps and guest exception EFlags as
+#                       x64 Windows delivers them (tests/x64/tfstep-x64.c)
 for P in "$R"/build/fex-arm64ec/patches/*.patch; do
     [ -e "$P" ] || continue
     if git -C "$R/FEX" apply --reverse --check "$P" 2>/dev/null; then

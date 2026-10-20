@@ -1,0 +1,187 @@
+diff --git a/FEXCore/Source/Interface/Core/OpcodeDispatcher.cpp b/FEXCore/Source/Interface/Core/OpcodeDispatcher.cpp
+index 3c42f47..0c2276d 100644
+--- a/FEXCore/Source/Interface/Core/OpcodeDispatcher.cpp
++++ b/FEXCore/Source/Interface/Core/OpcodeDispatcher.cpp
+@@ -476,7 +476,7 @@ void OpDispatchBuilder::POPSegmentOp(OpcodeArgs, uint32_t SegmentReg) {
+     break;
+   case FEXCore::X86Tables::DecodeFlags::FLAG_SS_PREFIX:
+     // Unset the 'active' bit in the packed TF, skipping the single step exception after this instruction
+-    SetRFLAG<FEXCore::X86State::RFLAG_TF_RAW_LOC>(_And(OpSize::i32Bit, GetRFLAG(FEXCore::X86State::RFLAG_TF_RAW_LOC), Constant(1)));
++    InhibitTFForNextInstruction();
+     _StoreContextGPR(DstSize, NewSegment, offsetof(FEXCore::Core::CPUState, ss_idx));
+     break;
+   case FEXCore::X86Tables::DecodeFlags::FLAG_DS_PREFIX:
+@@ -1280,6 +1280,8 @@ void OpDispatchBuilder::MOVSegOp(OpcodeArgs, bool ToSeg) {
+       break;
+     case FEXCore::X86State::REG_RDX: // SS
+     case FEXCore::X86State::REG_R10: // SS
++      // Like POP SS, MOV SS holds a single step until after the next instruction
++      InhibitTFForNextInstruction();
+       _StoreContextGPR(OpSize::i16Bit, Src, offsetof(FEXCore::Core::CPUState, ss_idx));
+       UpdatePrefixFromSegment(Src, FEXCore::X86Tables::DecodeFlags::FLAG_SS_PREFIX);
+       break;
+diff --git a/FEXCore/Source/Interface/Core/OpcodeDispatcher.h b/FEXCore/Source/Interface/Core/OpcodeDispatcher.h
+index c663454..715c2d8 100644
+--- a/FEXCore/Source/Interface/Core/OpcodeDispatcher.h
++++ b/FEXCore/Source/Interface/Core/OpcodeDispatcher.h
+@@ -1807,6 +1807,14 @@ private:
+     CFInverted = true;
+   }
+ 
++  // MOV SS and POP SS hold a pending single step until after the next instruction: unset the 'active' bit in the
++  // packed TF directly (SetRFLAG would treat a set TF as one that stays set and keep it active).
++  void InhibitTFForNextInstruction() {
++    const auto TFOffset = ARRAY_OFFSETOF(FEXCore::Core::CPUState, flags, FEXCore::X86State::RFLAG_TF_RAW_LOC);
++    auto PackedTF = _LoadContextGPR(OpSize::i8Bit, TFOffset);
++    _StoreContextGPR(OpSize::i8Bit, _And(OpSize::i32Bit, PackedTF, Constant(1)), TFOffset);
++  }
++
+   void SetRFLAG(Ref Value, unsigned BitOffset, unsigned ValueOffset = 0, bool MustMask = false) {
+     if (IsNZCV(BitOffset)) {
+       InsertNZCV(BitOffset, Value, ValueOffset, MustMask);
+@@ -1829,8 +1837,10 @@ private:
+       // An exception should still be raised after an instruction that unsets TF, leave the unblocked bit set but unset
+       // the TF bit to cause such behaviour. The handling code at the start of the next block will then unset the
+       // unblocked bit before raising the exception.
+-      auto NewPackedTF =
+-        _Select(OpSize::i64Bit, OpSize::i64Bit, CondClass::EQ, Value, Constant(0), _And(OpSize::i32Bit, PackedTF, Constant(~1)), Constant(1));
++      // Setting TF keeps the unblocked bit too (Madeira): a POPF/IRET that leaves TF set while it was already set
++      // traps after itself, as on hardware; only a TF that was clear (0 -> 1) is blocked for the next instruction.
++      auto NewPackedTF = _Select(OpSize::i64Bit, OpSize::i64Bit, CondClass::EQ, Value, Constant(0),
++                                 _And(OpSize::i32Bit, PackedTF, Constant(~1)), _Or(OpSize::i32Bit, PackedTF, Constant(1)));
+       _StoreContextGPR(OpSize::i8Bit, NewPackedTF, ARRAY_OFFSETOF(FEXCore::Core::CPUState, flags, BitOffset));
+     } else {
+       _StoreContextGPR(OpSize::i8Bit, Value, ARRAY_OFFSETOF(FEXCore::Core::CPUState, flags, BitOffset));
+diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
+index f79c770..5b86e9e 100644
+--- a/Source/Windows/ARM64EC/Module.cpp
++++ b/Source/Windows/ARM64EC/Module.cpp
+@@ -195,8 +195,25 @@ struct ThreadCPUArea {
+   }
+ };
+ 
++// Madeira: the EFlags an ARM64EC context cannot carry (it holds NZCV and TF only), so a guest exception handler saw
++// PF, AF and DF as zero and the guest got back whatever its handler left in them (tests/x64/tfstep-x64.c "popf",
++// "flags", "df"). Kept per delivered exception, innermost last, keyed by the guest RSP at the fault: put into the
++// context the handlers see (ResetToConsistentStateImpl) and back into the guest when it continues there
++// (SyncThreadContext).
++static constexpr uint32_t GuestOnlyEFlagsMask {(1U << FEXCore::X86State::RFLAG_PF_RAW_LOC) | (1U << FEXCore::X86State::RFLAG_AF_RAW_LOC) |
++                                               (1U << FEXCore::X86State::RFLAG_DF_RAW_LOC)};
++
++struct GuestExceptionEFlags {
++  uint64_t Rsp;
++  uint64_t Rip;
++  uint32_t EFlags;
++};
++
+ struct FrontendThreadData {
+   bool InLockedRWXRead {};
++  static constexpr size_t MaxGuestExceptionEFlags = 8;
++  GuestExceptionEFlags ExceptionEFlags[MaxGuestExceptionEFlags] {};
++  size_t ExceptionEFlagsCount {};
+ };
+ 
+ namespace {
+@@ -319,6 +336,26 @@ FrontendThreadData* GetFrontendThreadData(FEXCore::Core::InternalThreadState* Th
+   return static_cast<FrontendThreadData*>(Thread->FrontendPtr);
+ }
+ 
++// Drops the entries of handlers that are no longer running: those below Rsp on the guest stack, and with
++// Inclusive, one at Rsp itself.
++static void DropGuestExceptionEFlags(FrontendThreadData* Data, uint64_t Rsp, bool Inclusive) {
++  auto& Count = Data->ExceptionEFlagsCount;
++  while (Count && (Data->ExceptionEFlags[Count - 1].Rsp < Rsp || (Inclusive && Data->ExceptionEFlags[Count - 1].Rsp == Rsp))) {
++    Count--;
++  }
++}
++
++static void PushGuestExceptionEFlags(FEXCore::Core::InternalThreadState* Thread, uint64_t Rsp, uint64_t Rip, uint32_t EFlags) {
++  auto* Data = GetFrontendThreadData(Thread);
++  if (!Data) {
++    return;
++  }
++  DropGuestExceptionEFlags(Data, Rsp, true);
++  if (Data->ExceptionEFlagsCount < FrontendThreadData::MaxGuestExceptionEFlags) {
++    Data->ExceptionEFlags[Data->ExceptionEFlagsCount++] = {.Rsp = Rsp, .Rip = Rip, .EFlags = EFlags & GuestOnlyEFlagsMask};
++  }
++}
++
+ bool IsEmulatorStackAddress(const ThreadCPUArea CPUArea, uint64_t Address) {
+   return Address <= CPUArea.EmulatorStackBase() && Address >= CPUArea.EmulatorStackLimit();
+ }
+@@ -706,8 +743,11 @@ static void RethrowGuestException(const EXCEPTION_RECORD& Rec, ARM64_NT_CONTEXT&
+   // X64 Windows always clears TF, DF and AF when handling an exception, restoring after.
+   // Current ARM64EC windows can only restore NZCV+SS when returning from an exception and other flags are left untouched from the handler context.
+   // TODO: Can extend wine to support this by mapping the remaining EFlags into reserved cpsr members.
+-  uint32_t EFlags = CTX->ReconstructCompactedEFLAGS(Thread, false, nullptr, 0);
+-  EFlags &= ~(1 << FEXCore::X86State::RFLAG_TF_RAW_LOC);
++  // Madeira: DF is cleared for the handler too (measured on Windows: the handler runs with TF and DF clear), and
++  // the guest's PF, AF and DF are kept for the handler's context and the return (GuestOnlyEFlagsMask).
++  const uint32_t GuestEFlags = CTX->ReconstructCompactedEFLAGS(Thread, false, nullptr, 0);
++  uint32_t EFlags = GuestEFlags;
++  EFlags &= ~((1 << FEXCore::X86State::RFLAG_TF_RAW_LOC) | (1 << FEXCore::X86State::RFLAG_DF_RAW_LOC));
+   CTX->SetFlagsFromCompactedEFLAGS(Thread, EFlags);
+ 
+   Args->Rec = FEX::Windows::HandleGuestException(Fault, Rec, Args->Context.Pc, Args->Context.X8, Args->Context.X0);
+@@ -717,6 +757,7 @@ static void RethrowGuestException(const EXCEPTION_RECORD& Rec, ARM64_NT_CONTEXT&
+     // INT3 will set RIP to the instruction following it, undo this (any edge cases with multibyte instructions that trigger breakpoints are bugs present in Windows also)
+     Args->Context.Pc -= 1;
+   }
++  PushGuestExceptionEFlags(Thread, Args->Context.Sp, Args->Context.Pc, GuestEFlags);
+ 
+   Context.Sp = reinterpret_cast<uint64_t>(Args);
+   Context.Pc = KiUserExceptionDispatcher;
+@@ -853,6 +894,18 @@ extern "C" void SyncThreadContext(CONTEXT* Context) {
+                                                (1U << FEXCore::X86State::RFLAG_TF_RAW_LOC)};
+ 
+   uint32_t StateEFlags = CTX->ReconstructCompactedEFLAGS(Thread, false, nullptr, 0);
++
++  // Madeira: continuing where a delivered exception left the guest gets the guest's own PF, AF and DF back, not the
++  // handler's (see GuestOnlyEFlagsMask).
++  if (auto* Data = GetFrontendThreadData(Thread)) {
++    DropGuestExceptionEFlags(Data, Context->Rsp, false);
++    auto& Count = Data->ExceptionEFlagsCount;
++    if (Count && Data->ExceptionEFlags[Count - 1].Rsp == Context->Rsp) {
++      StateEFlags = (StateEFlags & ~GuestOnlyEFlagsMask) | Data->ExceptionEFlags[Count - 1].EFlags;
++      Count--;
++    }
++  }
++
+   Context->EFlags = (Context->EFlags & ECValidEFlagsMask) | (StateEFlags & ~ECValidEFlagsMask);
+   Exception::LoadStateFromECContext(Thread, *Context);
+ }
+@@ -1466,6 +1519,14 @@ bool ResetToConsistentStateImpl(const ThreadCPUArea CPUArea, EXCEPTION_RECORD* E
+   }
+ 
+   if (!IsJIT && !IsDispatcherAddress(NativeContext->Pc)) {
++    // Madeira: the guest exception RethrowGuestException delivered, now converted to the x64 context its handlers
++    // get: put back the guest's PF, AF and DF, which the ARM64EC context could not carry.
++    if (auto* Data = GetFrontendThreadData(Thread); Data && Data->ExceptionEFlagsCount) {
++      const auto& Top = Data->ExceptionEFlags[Data->ExceptionEFlagsCount - 1];
++      if (GuestContext->Rsp == Top.Rsp && GuestContext->Rip == Top.Rip) {
++        GuestContext->EFlags = (GuestContext->EFlags & ~GuestOnlyEFlagsMask) | Top.EFlags;
++      }
++    }
+     LogMan::Msg::DFmt("Passing through exception");
+     return false;
+   }
+diff --git a/Source/Windows/Common/Exception.h b/Source/Windows/Common/Exception.h
+index 73bf5a9..b7a6b9c 100644
+--- a/Source/Windows/Common/Exception.h
++++ b/Source/Windows/Common/Exception.h
+@@ -56,7 +56,14 @@ static inline EXCEPTION_RECORD HandleGuestException(FEXCore::Core::CpuStateFrame
+           Dst.ExceptionInformation[0] = Rax;
+           // Note that ExceptionAddress doesn't equal the reported context RIP here, this discrepancy expected and not having it can trigger anti-debug logic.
+           return Dst;
+-        default: LogMan::Msg::EFmt("Unknown interrupt: 0x{:X}", Fault.err_code >> 3); break;
++        default:
++          // INT n through a gate user mode may not use (e.g. INT 1, CD 01) raises #GP; Windows reports it as an
++          // access violation at the INT, reading address ~0 (measured, tests/x64/tfstep-x64.c "int1").
++          Dst.ExceptionCode = EXCEPTION_ACCESS_VIOLATION;
++          Dst.NumberParameters = 2;
++          Dst.ExceptionInformation[0] = EXCEPTION_READ_FAULT;
++          Dst.ExceptionInformation[1] = ~0ULL;
++          return Dst;
+         }
+       } else {
+         Dst.ExceptionCode = EXCEPTION_PRIV_INSTRUCTION;
