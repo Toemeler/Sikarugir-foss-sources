@@ -74,6 +74,7 @@ extern void winios_direct_cursor_set( unsigned int id, int w, int h, int hot_x, 
                                       const void *bgra ) __attribute__((weak));
 extern void winios_direct_cursor_show( int show ) __attribute__((weak));
 extern void winios_direct_cursor_pos( int x, int y ) __attribute__((weak));
+extern void winios_direct_cursor_warp( int x, int y ) __attribute__((weak));
 
 static int winios_desktop_mode(void);
 
@@ -102,7 +103,13 @@ static void winios_report_cursor_pos(void)
 /* A program moved its cursor itself (SetCursorPos). Direct mode only. */
 static BOOL winios_drv_set_cursor_pos( INT x, INT y )
 {
-    if (winios_direct_cursor_on()) winios_direct_cursor_pos( x, y );
+    /* ml1261: reported as a warp, so the app sees mouse-look that recentres a
+     * shown cursor (HardwareInput.swift, WarpLook). */
+    if (winios_direct_cursor_on())
+    {
+        if (winios_direct_cursor_warp) winios_direct_cursor_warp( x, y );
+        else winios_direct_cursor_pos( x, y );
+    }
     return TRUE;
 }
 

@@ -84,6 +84,19 @@ void winios_direct_cursor_pos(int x, int y)
     cursor_notify_unlocked(notify);
 }
 
+void winios_direct_cursor_warp(int x, int y)
+{
+    int notify;
+    if (!winios_direct_cursor_wanted()) return;
+    pthread_mutex_lock(&cursor_lock);
+    cursor_state.x = x;
+    cursor_state.y = y;
+    cursor_state.warps++;
+    notify = cursor_mark_changed();
+    pthread_mutex_unlock(&cursor_lock);
+    cursor_notify_unlocked(notify);
+}
+
 void winios_direct_cursor_enable(winios_direct_cursor_notify_t notify)
 {
     pthread_mutex_lock(&cursor_lock);

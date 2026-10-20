@@ -65,6 +65,8 @@ import ObjectiveC
 // On iPad, while the program hides its cursor and the pointer is over the game
 // view, the pointer is locked (hidden and pinned, deltas keep coming at the
 // screen edges); the lock is released when the program shows a cursor again.
+// A program that keeps its cursor shown but recentres it with SetCursorPos
+// every frame (mouse-look, Elden Ring) counts as hiding it (`WarpLook`).
 //
 // CURSOR: with no virtual desktop (a program on the game view) nothing drew a
 // Windows cursor: the finger is the pointer there. While the mouse is in use,
@@ -86,7 +88,7 @@ import ObjectiveC
 // relative there; MADEIRA_POINTER_ABSOLUTE=0 keeps motion relative
 // everywhere; MADEIRA_POINTER_LOCK=0 never locks the pointer;
 // MADEIRA_POINTER_AUTOLOCK=0 locks it only on request (Ctrl+Alt+P or the lock
-// button). Documents/madeira-input.json holds the settings: `sensMouse` (mouse
+// button); MADEIRA_WARP_LOOK=0 ignores recentring. Documents/madeira-input.json holds the settings: `sensMouse` (mouse
 // gain, default 1.0), `padRightStickMouse` (default false) and
 // `ignoreTouchesWithMouse` (default true; false disables the AssistiveTouch
 // click filter). The driver side has MADEIRA_NAV_KEYS_E0. Log tag:
@@ -454,6 +456,33 @@ enum PointerPolicy {
     }
 }
 
+/// ml1261: mouse-look that keeps a cursor SHOWN and recentres it with SetCursorPos
+/// every frame (Elden Ring). On the absolute route every pointer event put the
+/// cursor back under the finger, the program read the distance to the centre as
+/// motion each frame, and the view turned on its own, faster the farther from the
+/// centre (a joystick, not a mouse). `minWarps` program warps within `window`
+/// seconds count as mouse-look: the cursor is treated as hidden (relative route,
+/// automatic lock) until no warp came for `window` seconds. One warp (a menu that
+/// centres the cursor once) changes nothing. MADEIRA_WARP_LOOK=0 turns it off.
+struct WarpLook {
+    static let window = 1.0
+    static let minWarps = 3
+    private(set) var times: [Double] = []
+
+    /// Note a warp at `now`; returns whether mouse-look is on.
+    mutating func warp(at now: Double) -> Bool {
+        times.append(now)
+        times.removeAll { now - $0 > Self.window }
+        return times.count >= Self.minWarps
+    }
+
+    /// Whether mouse-look is still on at `now`.
+    func active(at now: Double) -> Bool {
+        guard let last = times.last else { return false }
+        return times.count >= Self.minWarps && now - last <= Self.window
+    }
+}
+
 /// Pointer lock that follows the program's cursor (iPad): lock while it hides
 /// its cursor and the pointer is over the game view, release when it shows one
 /// or loses focus. Only a program that is live locks the pointer: its driver
@@ -505,6 +534,9 @@ final class HardwareInput: ObservableObject {
     /// MADEIRA_POINTER_ABSOLUTE=0: the program's cursor never follows the iOS
     /// pointer's position; all motion is relative.
     static let absoluteEnabled = enabled && flag("MADEIRA_POINTER_ABSOLUTE", defaultOn: true)
+    /// MADEIRA_WARP_LOOK=0: a program that recentres a shown cursor keeps the
+    /// absolute route (see `WarpLook`).
+    static let warpLookEnabled = enabled && flag("MADEIRA_WARP_LOOK", defaultOn: true)
     /// MADEIRA_POINTER_LOCK=0: the pointer is never locked and no lock button
     /// or chord is offered.
     static let lockEnabled = enabled && flag("MADEIRA_POINTER_LOCK", defaultOn: true)
@@ -599,6 +631,11 @@ final class HardwareInput: ObservableObject {
 
     private var cursorState = winios_direct_cursor_state()
     private var cursorHiddenSince: CFTimeInterval = 0
+    private var warpLook = WarpLook()
+    private var warpLooking = false
+    /// The program's cursor as the route and the automatic lock see it: shown,
+    /// and not recentred every frame by mouse-look (`WarpLook`).
+    private var programCursorShown: Bool { cursorState.shown != 0 && !warpLooking }
     private var lastReportAt: CFTimeInterval = 0
     /// The mouse (or the right-stick mouse) is being used; a finger on the game
     /// view clears it. The drawn cursor shows only while this is true.
@@ -1242,7 +1279,7 @@ final class HardwareInput: ObservableObject {
 
     private var cursorShownForRoute: Bool {
         if Self.desktopMode { return true }
-        return directCursorLive && cursorState.shown != 0
+        return directCursorLive && programCursorShown
     }
 
     private func updateRoute() {
@@ -1288,6 +1325,10 @@ final class HardwareInput: ObservableObject {
         winios_direct_cursor_get(&cursorState)
         let now = CACurrentMediaTime()
         lastReportAt = now
+        if Self.warpLookEnabled, cursorState.warps != before.warps, cursorState.shown != 0 {
+            let on = warpLook.warp(at: now)
+            if on != warpLooking { setWarpLooking(on) }
+        }
         if cursorState.image_serial != before.image_serial { DirectCursorOverlay.shared.loadImage() }
         if before.reports == 0 || cursorState.shown != before.shown {
             cursorHiddenSince = cursorState.shown != 0 ? 0 : now
@@ -1302,9 +1343,31 @@ final class HardwareInput: ObservableObject {
         }
     }
 
+    /// ml1261: mouse-look by recentring started or ended (`WarpLook`). While on,
+    /// the route is relative and the automatic lock may pin the pointer; it ends
+    /// `WarpLook.window` seconds after the last warp. Main thread.
+    private func setWarpLooking(_ on: Bool) {
+        warpLooking = on
+        let now = CACurrentMediaTime()
+        cursorHiddenSince = on ? now : (cursorState.shown != 0 ? 0 : now)
+        log("mouse-look by recentring: \(on ? "on" : "off")")
+        updateRoute()
+        updateAutoLock()
+        renderCursor()
+        if on { scheduleWarpLookCheck() }
+    }
+
+    private func scheduleWarpLookCheck() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + WarpLook.window) { [weak self] in
+            guard let self, self.warpLooking else { return }
+            if self.warpLook.active(at: CACurrentMediaTime()) { self.scheduleWarpLookCheck() }
+            else { self.setWarpLooking(false) }
+        }
+    }
+
     private func renderCursor() {
         guard directCursorLive else { return }
-        let visible = mouseInUse && mouseFocused && cursorState.shown != 0
+        let visible = mouseInUse && mouseFocused && programCursorShown
         let pos = lastAbsolute ?? (x: cursorState.x, y: cursorState.y)
         DirectCursorOverlay.shared.render(visible: visible, x: pos.x, y: pos.y)
     }
@@ -1317,7 +1380,7 @@ final class HardwareInput: ObservableObject {
         let now = CACurrentMediaTime()
         motionLock.lock(); let lastDelta = lastGCDeltaAt; motionLock.unlock()
         let action = AutoLock.decide(
-            locked: pointerLocked, lockedByUs: lockedByUs, cursorShown: cursorState.shown != 0,
+            locked: pointerLocked, lockedByUs: lockedByUs, cursorShown: programCursorShown,
             hiddenFor: cursorState.reports == 0 || cursorHiddenSince == 0 ? 0 : now - cursorHiddenSince,
             pointerOver: pointerOver, focused: baseFocused,
             sinceReport: lastReportAt == 0 ? .infinity : now - lastReportAt,
@@ -1326,7 +1389,7 @@ final class HardwareInput: ObservableObject {
         case .lock where !autoLockSuppressed:
             setPointerLocked(true, byUs: true, why: "the program hides its cursor")
         case .unlock:
-            setPointerLocked(false, byUs: true, why: cursorState.shown != 0 ? "the program shows its cursor"
+            setPointerLocked(false, byUs: true, why: programCursorShown ? "the program shows its cursor"
                              : baseFocused ? "the program stopped reporting" : "focus lost")
         default:
             break

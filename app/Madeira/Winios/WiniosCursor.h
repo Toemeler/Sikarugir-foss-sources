@@ -30,6 +30,8 @@ void winios_direct_cursor_set(unsigned int id, int w, int h, int hot_x, int hot_
 void winios_direct_cursor_show(int show);
 /* Wine's cursor position in screen pixels, after clipping. */
 void winios_direct_cursor_pos(int x, int y);
+/* ml1261: the program moved its cursor itself (SetCursorPos). Always notifies. */
+void winios_direct_cursor_warp(int x, int y);
 
 /* ---- app side ---- */
 
@@ -49,6 +51,7 @@ struct winios_direct_cursor_state {
     int w, h, hot_x, hot_y;    /* current image; w == 0: none yet */
     unsigned int image_serial; /* bumps on every new image */
     unsigned int reports;      /* counts notifying reports: a program is live */
+    unsigned int warps;        /* ml1261: counts the program's own SetCursorPos calls */
 };
 
 /* Snapshot the state and re-arm the notification. */
