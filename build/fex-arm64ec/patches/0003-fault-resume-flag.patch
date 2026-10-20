@@ -1,5 +1,5 @@
 diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
-index 5b86e9e..f94b3f1 100644
+index 5b86e9e..6f4f1d7 100644
 --- a/Source/Windows/ARM64EC/Module.cpp
 +++ b/Source/Windows/ARM64EC/Module.cpp
 @@ -336,6 +336,17 @@ FrontendThreadData* GetFrontendThreadData(FEXCore::Core::InternalThreadState* Th
@@ -7,7 +7,7 @@ index 5b86e9e..f94b3f1 100644
  }
  
 +// The guest exceptions HandleGuestException makes from a trap (the instruction has completed) rather than a fault.
-+static bool IsGuestTrapException(DWORD Code) {
++static bool IsGuestTrapException(NTSTATUS Code) {
 +  switch (Code) {
 +  case EXCEPTION_SINGLE_STEP:
 +  case EXCEPTION_BREAKPOINT:
