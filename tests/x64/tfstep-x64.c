@@ -7,6 +7,18 @@
  * records every exception it causes. Run it on a real x64 Windows PC and under
  * Madeira: the lines that differ are what FEX/Wine deliver differently.
  *
+ * Every case then runs a second time with no vectored handler: the case code gets
+ * a function table entry (RtlAddFunctionTable) whose unwind info names a
+ * frame-based handler (UNW_FLAG_EHANDLER), the way ersc.dll's .pdata names its
+ * handler. RtlDispatchException has to find that entry, unwind to the frame and
+ * call the x64 handler, and take its EXCEPTION_DISPOSITION back. Those lines start
+ * with "[seh ". A top-level filter catches what no handler takes, so a case whose
+ * frame handler is never called shows up as via=filter instead of ending the
+ * program. The expected addresses are the vectored ones: the CPU stops at the same
+ * place whoever handles it. Windows 10 (i7-10750H) calls the frame-based handler
+ * once per exception with EstablisherFrame = the context's Rsp (frame=rsp+0), also
+ * in "call" where the step stops on the callee's ret: 13/13 there as well.
+ *
  * The case bytes come from ml64 (the MASM source is in each comment); they are
  * copied into an RWX buffer, so offsets below are from the start of each case.
  * "expect" is real hardware (Windows 10, measured); every line also goes to
@@ -119,19 +131,33 @@ static const case_t CASES[] = {
 };
 #define NCASES ((int)(sizeof(CASES) / sizeof(CASES[0])))
 
+enum { VIA_VEH, VIA_SEH, VIA_FILTER };
+static const char *const VIA_NAME[] = {"veh", "seh", "filter"};
+
 typedef struct {
     DWORD code, flags, nparams, eflags, ctxflags;
     unsigned handler_eflags;  /* the handler's own live EFLAGS */
+    int via;                /* which handler got it */
     ULONG64 info0, info1;
     LONG64 addr, rip;       /* offsets from the case start */
+    LONG64 estab;           /* frame-based: EstablisherFrame - context Rsp */
     ULONG64 dr0, dr1, dr2, dr3, dr6, dr7;
 } event_t;
+
+/* Frame-based mode: the unwind info and a jump to seh_handler live in the case
+ * buffer, since a handler is named by a 32-bit offset from the table's base. */
+#define UNWIND_OFF 0x800
+#define TRAMP_OFF  0x820
+#ifndef UNW_FLAG_EHANDLER
+#define UNW_FLAG_EHANDLER 1
+#endif
 
 static unsigned char *g_buf;
 static const case_t *volatile g_case;
 static event_t g_ev[MAXEV];
 static volatile int g_n, g_outside, g_lost;
 static HANDLE g_fh = INVALID_HANDLE_VALUE;
+static RUNTIME_FUNCTION g_rf;
 
 static void lg(const char *fmt, ...)
 {
@@ -147,24 +173,23 @@ static void lg(const char *fmt, ...)
     if (g_fh != INVALID_HANDLE_VALUE) { WriteFile(g_fh, buf, (DWORD)n, &w, NULL); FlushFileBuffers(g_fh); }
 }
 
-static LONG CALLBACK handler(EXCEPTION_POINTERS *ep)
+/* Records the exception and edits the context to go on. Returns 1 when the
+ * program should continue there, 0 when the exception is not the case's. */
+static int on_exception(EXCEPTION_RECORD *r, CONTEXT *c, unsigned live, int via, LONG64 estab)
 {
     const case_t *k = g_case;
-    EXCEPTION_RECORD *r = ep->ExceptionRecord;
-    CONTEXT *c = ep->ContextRecord;
     ULONG64 base = (ULONG64)g_buf, addr = (ULONG64)r->ExceptionAddress;
-    unsigned live = (unsigned)__readeflags();
 
-    if (!k) return EXCEPTION_CONTINUE_SEARCH;
+    if (!k) return 0;
     int inside = c->Rip >= base && c->Rip < base + k->len;
     int addr_inside = addr >= base && addr < base + k->len;
 
     if (!inside && !addr_inside) {
-        if (r->ExceptionCode != EXCEPTION_SINGLE_STEP) return EXCEPTION_CONTINUE_SEARCH;
+        if (r->ExceptionCode != EXCEPTION_SINGLE_STEP) return 0;
         /* A step that escaped the case (TF left set): stop it here. */
         g_outside++;
         c->EFlags &= ~TF;
-        return EXCEPTION_CONTINUE_EXECUTION;
+        return 1;
     }
 
     if (g_n < MAXEV) {
@@ -179,6 +204,8 @@ static LONG CALLBACK handler(EXCEPTION_POINTERS *ep)
         e->eflags = c->EFlags;
         e->ctxflags = c->ContextFlags;
         e->handler_eflags = live;
+        e->via = via;
+        e->estab = estab;
         e->dr0 = c->Dr0; e->dr1 = c->Dr1; e->dr2 = c->Dr2; e->dr3 = c->Dr3;
         e->dr6 = c->Dr6; e->dr7 = c->Dr7;
     } else {
@@ -189,17 +216,66 @@ static LONG CALLBACK handler(EXCEPTION_POINTERS *ep)
     if (r->ExceptionCode == EXCEPTION_SINGLE_STEP && inside) {
         if (k->mode == M_KEEP && c->Rip - base < k->len - 2 && g_n < MAXEV) c->EFlags |= TF;
         else c->EFlags &= ~TF;
-        return EXCEPTION_CONTINUE_EXECUTION;
+        return 1;
     }
     if (r->ExceptionCode == EXCEPTION_BREAKPOINT && k->mode == M_BP && addr_inside) {
         c->Rip = addr + 1;
         c->EFlags |= TF;
-        return EXCEPTION_CONTINUE_EXECUTION;
+        return 1;
     }
     /* Anything else raised by the case: step over the instruction. */
     c->Rip = (addr_inside ? addr : c->Rip) + k->skip;
     c->EFlags &= ~TF;
-    return EXCEPTION_CONTINUE_EXECUTION;
+    return 1;
+}
+
+static LONG CALLBACK handler(EXCEPTION_POINTERS *ep)
+{
+    unsigned live = (unsigned)__readeflags();
+    return on_exception(ep->ExceptionRecord, ep->ContextRecord, live, VIA_VEH, 0)
+               ? EXCEPTION_CONTINUE_EXECUTION : EXCEPTION_CONTINUE_SEARCH;
+}
+
+/* The frame-based handler the case's unwind info names (reached through the jump
+ * at TRAMP_OFF). Its return value is what ersc.dll's handler hands back too. */
+static EXCEPTION_DISPOSITION seh_handler(EXCEPTION_RECORD *r, void *frame, CONTEXT *c, DISPATCHER_CONTEXT *dc)
+{
+    unsigned live = (unsigned)__readeflags();
+    (void)dc;
+    if (r->ExceptionFlags & (EXCEPTION_UNWINDING | EXCEPTION_EXIT_UNWIND)) return ExceptionContinueSearch;
+    return on_exception(r, c, live, VIA_SEH, (LONG64)((ULONG64)frame - c->Rsp))
+               ? ExceptionContinueExecution : ExceptionContinueSearch;
+}
+
+/* What no handler took: the frame-based handler was skipped, or a step escaped. */
+static LONG WINAPI last_chance(EXCEPTION_POINTERS *ep)
+{
+    unsigned live = (unsigned)__readeflags();
+    return on_exception(ep->ExceptionRecord, ep->ContextRecord, live, VIA_FILTER, 0)
+               ? EXCEPTION_CONTINUE_EXECUTION : EXCEPTION_CONTINUE_SEARCH;
+}
+
+/* Unwind info for the case code: no prolog, no saved registers, a handler. */
+static void add_seh_table(const case_t *k)
+{
+    unsigned char *u = g_buf + UNWIND_OFF, *t = g_buf + TRAMP_OFF;
+    ULONG64 target = (ULONG64)seh_handler;
+    DWORD rva = TRAMP_OFF;
+
+    u[0] = 1 | (UNW_FLAG_EHANDLER << 3);    /* version 1 */
+    u[1] = 0;                               /* SizeOfProlog */
+    u[2] = 0;                               /* CountOfCodes */
+    u[3] = 0;                               /* no frame register */
+    memcpy(u + 4, &rva, 4);                 /* ExceptionHandler */
+    memset(u + 8, 0, 8);                    /* language-specific data */
+    t[0] = 0xff; t[1] = 0x25;               /* jmp qword ptr [rip+0] */
+    memset(t + 2, 0, 4);
+    memcpy(t + 6, &target, 8);
+    FlushInstructionCache(GetCurrentProcess(), t, 14);
+
+    g_rf.BeginAddress = 0;
+    g_rf.EndAddress = (DWORD)k->len;
+    g_rf.UnwindData = UNWIND_OFF;
 }
 
 static const char *code_name(DWORD code)
@@ -214,36 +290,33 @@ static const char *code_name(DWORD code)
     }
 }
 
-int main(void)
+/* Runs every case once; via is VIA_VEH (vectored handler) or VIA_SEH (frame-based). */
+static int run_cases(int via)
 {
-    char path[MAX_PATH];
-    DWORD n = GetModuleFileNameA(NULL, path, MAX_PATH);
-    if (n > 4 && n < MAX_PATH) {
-        memcpy(path + n - 4, ".log", 5);
-        g_fh = CreateFileA(path, GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-    }
-
-    lg("tfstep-x64: trap-flag single-step delivery (%d cases)\n", NCASES);
-    g_buf = VirtualAlloc(NULL, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
-    if (!g_buf || !AddVectoredExceptionHandler(1, handler)) {
-        lg("SETUP FAILED: buffer %p, error %lu\n", (void *)g_buf, GetLastError());
-        return 2;
-    }
-
+    const char *pre = via == VIA_SEH ? "seh " : "";
     int matched = 0;
+
     for (int i = 0; i < NCASES; i++) {
         const case_t *k = &CASES[i];
         ULONG64 out = 0;
 
-        lg("[%s] running\n", k->name);
+        lg("[%s%s] running\n", pre, k->name);
         memset(g_buf, 0xcc, 4096);
         memcpy(g_buf, k->code, k->len);
         FlushInstructionCache(GetCurrentProcess(), g_buf, k->len);
+        if (via == VIA_SEH) {
+            add_seh_table(k);
+            if (!RtlAddFunctionTable(&g_rf, 1, (DWORD64)g_buf)) {
+                lg("[%s%s] SETUP FAILED: RtlAddFunctionTable\n", pre, k->name);
+                continue;
+            }
+        }
         memset(g_ev, 0, sizeof(g_ev));
         g_n = g_outside = g_lost = 0;
         g_case = k;
         ((void (*)(ULONG64 *))g_buf)(&out);
         g_case = NULL;
+        if (via == VIA_SEH) RtlDeleteFunctionTable(&g_rf);
 
         int ok = g_n == k->nexp && !g_outside;
         for (int j = 0; ok && j < k->nexp; j++)
@@ -251,13 +324,15 @@ int main(void)
                  (g_ev[j].addr == k->exp[j].addr || (k->exp[j].alt && g_ev[j].addr == k->exp[j].alt));
         int ctx_ok = !k->ctx_mask || (g_n > 0 && (g_ev[0].eflags & k->ctx_mask) == k->ctx_want);
         int out_ok = !k->out_mask || (out & k->out_mask) == k->out_want;
-        int live_ok = 1;
-        for (int j = 0; j < g_n && j < MAXEV; j++)
+        int live_ok = 1, via_ok = 1;
+        for (int j = 0; j < g_n && j < MAXEV; j++) {
             if (g_ev[j].handler_eflags & (TF | DF)) live_ok = 0;
-        ok = ok && ctx_ok && out_ok && live_ok;
+            if (g_ev[j].via != via) via_ok = 0;
+        }
+        ok = ok && ctx_ok && out_ok && live_ok && via_ok;
         matched += ok;
 
-        lg("[%s] %s: %d exception(s), %d after the case, expect", k->name, ok ? "MATCH" : "DIFF", g_n, g_outside);
+        lg("[%s%s] %s: %d exception(s), %d after the case, expect", pre, k->name, ok ? "MATCH" : "DIFF", g_n, g_outside);
         for (int j = 0; j < k->nexp; j++) {
             lg(" %s@+%02x", code_name(k->exp[j].code), k->exp[j].addr);
             if (k->exp[j].alt) lg("|+%02x", k->exp[j].alt);
@@ -267,19 +342,48 @@ int main(void)
             lg("  context EFlags %08lx: bits %03x should be %03x\n", g_n ? g_ev[0].eflags : 0, k->ctx_mask, k->ctx_want);
         if (!out_ok) lg("  read back %llx: bits %03x should be %03x\n", out, k->out_mask, k->out_want);
         if (!live_ok) lg("  the handler ran with TF or DF set (Windows clears both for it)\n");
+        if (!via_ok) lg("  not every exception reached the %s handler\n", VIA_NAME[via]);
         for (int j = 0; j < g_n && j < MAXEV; j++) {
             const event_t *e = &g_ev[j];
             lg("  #%d %08lx %s addr=+%02llx rip=+%02llx eflags=%08lx flags=%lx params=%lu [%llx %llx] "
-               "ctxflags=%08lx dr0-3=%llx/%llx/%llx/%llx dr6=%llx dr7=%llx handler-eflags=%08x\n",
+               "ctxflags=%08lx dr0-3=%llx/%llx/%llx/%llx dr6=%llx dr7=%llx handler-eflags=%08x via=%s",
                j, e->code, code_name(e->code), e->addr, e->rip, e->eflags, e->flags, e->nparams,
                e->info0, e->info1, e->ctxflags, e->dr0, e->dr1, e->dr2, e->dr3, e->dr6, e->dr7,
-               e->handler_eflags);
+               e->handler_eflags, VIA_NAME[e->via]);
+            if (e->via == VIA_SEH) lg(" frame=rsp%+lld", e->estab);
+            lg("\n");
         }
         if (g_lost) lg("  (%d more not recorded)\n", g_lost);
         if (k->out_mask) lg("  read back %llx\n", out);
     }
+    return matched;
+}
 
+int main(void)
+{
+    char path[MAX_PATH];
+    DWORD n = GetModuleFileNameA(NULL, path, MAX_PATH);
+    if (n > 4 && n < MAX_PATH) {
+        memcpy(path + n - 4, ".log", 5);
+        g_fh = CreateFileA(path, GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    }
+
+    lg("tfstep-x64: trap-flag single-step delivery (%d cases, vectored then frame-based)\n", NCASES);
+    g_buf = VirtualAlloc(NULL, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    void *veh = g_buf ? AddVectoredExceptionHandler(1, handler) : NULL;
+    if (!veh) {
+        lg("SETUP FAILED: buffer %p, error %lu\n", (void *)g_buf, GetLastError());
+        return 2;
+    }
+    SetUnhandledExceptionFilter(last_chance);
+
+    int matched = run_cases(VIA_VEH);
     lg("tfstep-x64: %d/%d cases match x86 hardware\n", matched, NCASES);
+
+    RemoveVectoredExceptionHandler(veh);
+    int seh_matched = run_cases(VIA_SEH);
+    lg("tfstep-x64: seh %d/%d cases match x86 hardware (frame-based handler)\n", seh_matched, NCASES);
+
     if (g_fh != INVALID_HANDLE_VALUE) CloseHandle(g_fh);
-    return matched == NCASES ? 0 : 1;
+    return matched == NCASES && seh_matched == NCASES ? 0 : 1;
 }
