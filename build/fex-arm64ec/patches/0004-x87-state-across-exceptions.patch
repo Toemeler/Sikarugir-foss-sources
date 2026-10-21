@@ -1,0 +1,107 @@
+diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
+index 6f4f1d7..abf1984 100644
+--- a/Source/Windows/ARM64EC/Module.cpp
++++ b/Source/Windows/ARM64EC/Module.cpp
+@@ -203,10 +203,22 @@ struct ThreadCPUArea {
+ static constexpr uint32_t GuestOnlyEFlagsMask {(1U << FEXCore::X86State::RFLAG_PF_RAW_LOC) | (1U << FEXCore::X86State::RFLAG_AF_RAW_LOC) |
+                                                (1U << FEXCore::X86State::RFLAG_DF_RAW_LOC)};
+ 
++// Madeira: the x87 state an ARM64EC context cannot carry either. context_arm_to_x64 leaves FltSave's x87 part zero, so
++// a guest exception handler saw no x87 state, and SyncThreadContext loaded that zero back: after every NtContinue the
++// guest ran with its x87 registers cleared and control word 0 (tests/x64/sehctx-x64.c: fpcw 0000 in a handler once an
++// earlier exception had been continued; Windows 10 037f). Kept with the EFlags below and put into the same places.
++struct GuestX87State {
++  uint64_t MM[8][2];
++  uint16_t FCW;
++  uint16_t FSW;
++  uint8_t AbridgedFTW;
++};
++
+ struct GuestExceptionEFlags {
+   uint64_t Rsp;
+   uint64_t Rip;
+   uint32_t EFlags;
++  GuestX87State X87;
+ };
+ 
+ struct FrontendThreadData {
+@@ -356,6 +368,27 @@ static void DropGuestExceptionEFlags(FrontendThreadData* Data, uint64_t Rsp, boo
+   }
+ }
+ 
++static GuestX87State CaptureGuestX87State(FEXCore::Core::InternalThreadState* Thread) {
++  const auto& State = Thread->CurrentFrame->State;
++  GuestX87State X87 {
++    .FCW = State.FCW,
++    .FSW = static_cast<uint16_t>(
++      (State.flags[FEXCore::X86State::X87FLAG_TOP_LOC] << 11) | (State.flags[FEXCore::X86State::X87FLAG_C0_LOC] << 8) |
++      (State.flags[FEXCore::X86State::X87FLAG_C1_LOC] << 9) | (State.flags[FEXCore::X86State::X87FLAG_C2_LOC] << 10) |
++      (State.flags[FEXCore::X86State::X87FLAG_C3_LOC] << 14) | State.flags[FEXCore::X86State::X87FLAG_IE_LOC]),
++    .AbridgedFTW = State.AbridgedFTW,
++  };
++  memcpy(X87.MM, State.mm, sizeof(X87.MM));
++  return X87;
++}
++
++static void StoreGuestX87State(const GuestX87State& X87, CONTEXT& Context) {
++  memcpy(Context.FltSave.FloatRegisters, X87.MM, sizeof(X87.MM));
++  Context.FltSave.ControlWord = X87.FCW;
++  Context.FltSave.StatusWord = X87.FSW;
++  Context.FltSave.TagWord = X87.AbridgedFTW;
++}
++
+ static void PushGuestExceptionEFlags(FEXCore::Core::InternalThreadState* Thread, uint64_t Rsp, uint64_t Rip, uint32_t EFlags) {
+   auto* Data = GetFrontendThreadData(Thread);
+   if (!Data) {
+@@ -363,7 +396,8 @@ static void PushGuestExceptionEFlags(FEXCore::Core::InternalThreadState* Thread,
+   }
+   DropGuestExceptionEFlags(Data, Rsp, true);
+   if (Data->ExceptionEFlagsCount < FrontendThreadData::MaxGuestExceptionEFlags) {
+-    Data->ExceptionEFlags[Data->ExceptionEFlagsCount++] = {.Rsp = Rsp, .Rip = Rip, .EFlags = EFlags & GuestOnlyEFlagsMask};
++    Data->ExceptionEFlags[Data->ExceptionEFlagsCount++] = {
++      .Rsp = Rsp, .Rip = Rip, .EFlags = EFlags & GuestOnlyEFlagsMask, .X87 = CaptureGuestX87State(Thread)};
+   }
+ }
+ 
+@@ -905,18 +939,26 @@ extern "C" void SyncThreadContext(CONTEXT* Context) {
+                                                (1U << FEXCore::X86State::RFLAG_TF_RAW_LOC)};
+ 
+   uint32_t StateEFlags = CTX->ReconstructCompactedEFLAGS(Thread, false, nullptr, 0);
++  GuestX87State X87 = CaptureGuestX87State(Thread);
+ 
+   // Madeira: continuing where a delivered exception left the guest gets the guest's own PF, AF and DF back, not the
+-  // handler's (see GuestOnlyEFlagsMask).
++  // handler's (see GuestOnlyEFlagsMask), and its x87 state as it was at the exception (see GuestX87State).
+   if (auto* Data = GetFrontendThreadData(Thread)) {
+     DropGuestExceptionEFlags(Data, Context->Rsp, false);
+     auto& Count = Data->ExceptionEFlagsCount;
+     if (Count && Data->ExceptionEFlags[Count - 1].Rsp == Context->Rsp) {
+       StateEFlags = (StateEFlags & ~GuestOnlyEFlagsMask) | Data->ExceptionEFlags[Count - 1].EFlags;
++      X87 = Data->ExceptionEFlags[Count - 1].X87;
+       Count--;
+     }
+   }
+ 
++  // Madeira: a context converted from an ARM64EC one has no x87 state (control word 0, which x87 never holds: bit 6
++  // always reads as 1). Keep the guest's instead of loading zeros (see GuestX87State).
++  if ((Context->ContextFlags & CONTEXT_FLOATING_POINT) == CONTEXT_FLOATING_POINT && Context->FltSave.ControlWord == 0) {
++    StoreGuestX87State(X87, *Context);
++  }
++
+   Context->EFlags = (Context->EFlags & ECValidEFlagsMask) | (StateEFlags & ~ECValidEFlagsMask);
+   Exception::LoadStateFromECContext(Thread, *Context);
+ }
+@@ -1531,11 +1573,12 @@ bool ResetToConsistentStateImpl(const ThreadCPUArea CPUArea, EXCEPTION_RECORD* E
+ 
+   if (!IsJIT && !IsDispatcherAddress(NativeContext->Pc)) {
+     // Madeira: the guest exception RethrowGuestException delivered, now converted to the x64 context its handlers
+-    // get: put back the guest's PF, AF and DF, which the ARM64EC context could not carry.
++    // get: put back the guest's PF, AF and DF and its x87 state, which the ARM64EC context could not carry.
+     if (auto* Data = GetFrontendThreadData(Thread); Data && Data->ExceptionEFlagsCount) {
+       const auto& Top = Data->ExceptionEFlags[Data->ExceptionEFlagsCount - 1];
+       if (GuestContext->Rsp == Top.Rsp && GuestContext->Rip == Top.Rip) {
+         GuestContext->EFlags = (GuestContext->EFlags & ~GuestOnlyEFlagsMask) | Top.EFlags;
++        StoreGuestX87State(Top.X87, *GuestContext);
+         // Madeira: a fault's context has RF set, as the CPU pushes it for every fault but an instruction breakpoint
+         // (measured on Windows 10: an access violation's context EFlags 0x10202, tests/x64/tfstep-x64.c "fault").
+         // Traps (single step, INT3, INTO) leave it clear. RF itself is not carried back into the guest.
