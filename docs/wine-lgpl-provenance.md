@@ -136,4 +136,6 @@ signed off under the DCO (the fork's `CONTRIBUTING.md`):
   RtlWalkFrameChain walks and reports PE addresses, not JIT-pool ones; and
   0006-arm64ec-exception-frame-as-on-x64-windows.patch: an exception's record sits
   at context + 0x4f0 behind a CONTEXT_EX, FltSave.MxCsr_Mask is ffff, and NZCV is
-  clear before an x64 frame handler, as on x64 Windows.
+  clear before an x64 frame handler, as on x64 Windows; and
+  0007-ntdll-vectored-handlers-off-the-seh-path.patch: the vectored handler calls
+  are not inlined into dispatch_exception.

@@ -1,0 +1,21 @@
+diff --git a/dlls/ntdll/exception.c b/dlls/ntdll/exception.c
+--- a/dlls/ntdll/exception.c
++++ b/dlls/ntdll/exception.c
+@@ -146,7 +146,7 @@
+  *
+  * Call the vectored handlers chain.
+  */
+-static LONG call_vectored_handlers( EXCEPTION_RECORD *rec, CONTEXT *context )
++static __attribute__((noinline)) LONG call_vectored_handlers( EXCEPTION_RECORD *rec, CONTEXT *context )
+ {
+     LONG ret = EXCEPTION_CONTINUE_SEARCH;
+     EXCEPTION_POINTERS except_ptrs;
+@@ -282,7 +282,7 @@
+  * Wine kept the list (RtlAddVectoredContinueHandler) but never called it
+  * (tests/x64/sehctx-x64.c "veh+vch": Windows 10 calls veh, frame, vch).
+  */
+-static void call_vectored_continue_handlers( EXCEPTION_RECORD *rec, CONTEXT *context )
++static __attribute__((noinline)) void call_vectored_continue_handlers( EXCEPTION_RECORD *rec, CONTEXT *context )
+ {
+     EXCEPTION_POINTERS except_ptrs;
+     PVECTORED_EXCEPTION_HANDLER func;
