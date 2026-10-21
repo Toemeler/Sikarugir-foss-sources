@@ -24,6 +24,8 @@ B="$R/wine/build-arm64ec"
 #                       ntdll's image, not its JIT-pool copy (tests/x64/sehctx-x64.c "ret", "bt")
 #   0004-ntdll-call-vectored-continue-handlers  vectored continue handlers run once an exception
 #                       is continued, as on Windows (tests/x64/sehctx-x64.c "veh+vch")
+#   0005-arm64ec-walk-frame-chain-in-pe-space  RtlWalkFrameChain (RtlCaptureStackBackTrace)
+#                       walks and reports PE addresses, not JIT-pool ones (tests/x64/sehctx-x64.c "bt")
 # How many of them the tree already has, in order: undo them newest first on a
 # scratch copy of the files they touch until that works. Checking each patch on its
 # own fails for 0001 once 0002 is applied (they touch neighbouring lines).

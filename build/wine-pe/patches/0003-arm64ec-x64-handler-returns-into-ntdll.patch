@@ -2,7 +2,7 @@ diff --git a/dlls/ntdll/signal_arm64ec.c b/dlls/ntdll/signal_arm64ec.c
 index 2cf5a07..d28b0cb 100644
 --- a/dlls/ntdll/signal_arm64ec.c
 +++ b/dlls/ntdll/signal_arm64ec.c
-@@ -2684,6 +2684,56 @@ static DWORD __attribute__((naked)) call_seh_handler( EXCEPTION_RECORD *rec, ULO
+@@ -2684,6 +2684,59 @@ static DWORD __attribute__((naked)) call_seh_handler( EXCEPTION_RECORD *rec, ULO
  }
  
  
@@ -48,6 +48,9 @@ index 2cf5a07..d28b0cb 100644
 +         "adrp x16, __os_arm64x_dispatch_call_no_redirect\n\t"
 +         "ldr x16, [x16, #:lo12:__os_arm64x_dispatch_call_no_redirect]\n\t"
 +         "br x16\n"                  /* ExitToX64 pushes lr and enters the handler */
++         ".inst 0xd63f0200\n"        /* blr x16, never run: FEX enters EC code at a target that
++                                         follows one as a return, at any other as a call (through
++                                         the entry thunk named by the word before it) */
 +         "1:\tmov x0, x8\n\t"        /* rax */
 +         "add sp, sp, #0x30\n\t"
 +         "ldp x29, x30, [sp], #16\n\t"
@@ -59,7 +62,7 @@ index 2cf5a07..d28b0cb 100644
  /**********************************************************************
   *           ios_seh_xlate_note   (iOS-Madeira ml603)
   *
-@@ -3539,8 +3589,8 @@ NTSTATUS call_seh_handlers( EXCEPTION_RECORD *rec, CONTEXT *orig_context )
+@@ -3539,8 +3592,8 @@ NTSTATUS call_seh_handlers( EXCEPTION_RECORD *rec, CONTEXT *orig_context )
                      DWORD efl = c->EFlags, cflags = c->ContextFlags;
                      LONG n;
  

@@ -1,0 +1,23 @@
+diff --git a/dlls/ntdll/signal_arm64ec.c b/dlls/ntdll/signal_arm64ec.c
+--- a/dlls/ntdll/signal_arm64ec.c
++++ b/dlls/ntdll/signal_arm64ec.c
+@@ -4891,6 +4891,11 @@
+ 
+     for (i = 0; i < count; i++)
+     {
++        /* iOS: EC code runs from its JIT-pool copy, so RtlCaptureContext and every EC
++         * return address give pool addresses, which no function table covers: the walk
++         * "unwound" a leaf into the same function again (tests/x64/sehctx-x64.c "bt": 16
++         * copies of one pool address). Walk and report in PE space, as virtual_unwind does. */
++        context.Rip = (ULONG_PTR)xlate_ios_jit_rev( (void *)context.Rip );
+         pc = context.Rip;
+         if ((context.ContextFlags & CONTEXT_UNWOUND_TO_CALL) && RtlIsEcCode( pc )) pc -= 4;
+         func = RtlLookupFunctionEntry( pc, &base, &table );
+@@ -4900,6 +4905,7 @@
+         if (!context.Rip) break;
+         if (!frame || !is_valid_frame( frame )) break;
+         if (context.Rsp == (ULONG_PTR)NtCurrentTeb()->Tib.StackBase) break;
++        context.Rip = (ULONG_PTR)xlate_ios_jit_rev( (void *)context.Rip );  /* report it in PE space */
+         if (i >= skip) buffer[num_entries++] = (void *)context.Rip;
+     }
+     return num_entries;
