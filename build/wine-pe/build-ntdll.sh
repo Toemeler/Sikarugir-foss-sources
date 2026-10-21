@@ -15,20 +15,38 @@ TC="$R/toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin"
 export PATH="$TC:$PATH"
 B="$R/wine/build-arm64ec"
 # Madeira's own changes to the pinned Wine's ntdll, kept here rather than in the
-# submodule (patches/, applied in name order; one already applied is left as it is):
+# submodule (patches/, applied in name order; those already applied are left as they are):
 #   0001-arm64ec-x64-debug-registers  the x64 debug registers a guest sets through a
 #                       context come back in its exception contexts (tests/x64/tfstep-x64.c "drrt")
 #   0002-arm64ec-guest-seh-log-dr6  log what an x64 frame handler returns and does to its context
 #                       ([guest-seh]); Dr6 reads ffff0ff0 while Dr7 is armed, as on Windows 10
 #   0003-arm64ec-x64-handler-returns-into-ntdll  an x64 frame handler's return address is in
 #                       ntdll's image, not its JIT-pool copy (tests/x64/sehctx-x64.c "ret", "bt")
-for P in "$R"/build/wine-pe/patches/*.patch; do
-    [ -e "$P" ] || continue
-    if git -C "$R/wine" apply --reverse --check "$P" 2>/dev/null; then
-        echo "Wine patch already applied: $(basename "$P")"
+# How many of them the tree already has, in order: undo them newest first on a
+# scratch copy of the files they touch until that works. Checking each patch on its
+# own fails for 0001 once 0002 is applied (they touch neighbouring lines).
+PATCHES=()
+for P in "$R"/build/wine-pe/patches/*.patch; do [ -e "$P" ] && PATCHES+=("$P"); done
+APPLIED=0
+if [ ${#PATCHES[@]} -gt 0 ]; then
+    FILES=$(sed -n 's#^diff --git a/\([^ ]*\) .*#\1#p' "${PATCHES[@]}" | sort -u)
+    for ((K = ${#PATCHES[@]}; K > 0; K--)); do
+        T=$(mktemp -d)
+        for F in $FILES; do mkdir -p "$T/$(dirname "$F")"; cp "$R/wine/$F" "$T/$F"; done
+        OK=1
+        for ((J = K - 1; J >= 0; J--)); do
+            (cd "$T" && git apply --reverse "${PATCHES[J]}" 2>/dev/null) || { OK=0; break; }
+        done
+        rm -rf "$T"
+        if [ $OK = 1 ]; then APPLIED=$K; break; fi
+    done
+fi
+for ((J = 0; J < ${#PATCHES[@]}; J++)); do
+    if [ $J -lt $APPLIED ]; then
+        echo "Wine patch already applied: $(basename "${PATCHES[J]}")"
     else
-        git -C "$R/wine" apply "$P"
-        echo "Wine patch applied: $(basename "$P")"
+        git -C "$R/wine" apply "${PATCHES[J]}"
+        echo "Wine patch applied: $(basename "${PATCHES[J]}")"
     fi
 done
 if [ ! -f "$B/config.status" ]; then
