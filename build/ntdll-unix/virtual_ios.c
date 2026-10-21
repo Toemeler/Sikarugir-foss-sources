@@ -25446,6 +25446,37 @@ void ios_wow_map_user_shared_data(void)
 
 
 /******************************************************************
+ *		ios_init_emulated_avx_xstate
+ *
+ * The XSTATE configuration an x86-64 PC with AVX reports, for a game run with FEX's AVX
+ * (MADEIRA_FEX_AVX=1, the library's "AVX and AVX2" switch). Wine fills it on x86 hosts only
+ * (system.c init_xstate_features), so the guest's CPUID said XSAVE/OSXSAVE/AVX with XCR0 7
+ * while GetEnabledXStateFeatures said 0, a pair x64 Windows never shows (tests/x64/
+ * sehctx-x64.c "cpu"; Windows 10: XCR0 1f, enabled 1f). x87, SSE and AVX, standard
+ * (non-compacted) XSAVE layout, the offsets and sizes CPUID 0xd reports for them.
+ */
+static void ios_init_emulated_avx_xstate( XSTATE_CONFIGURATION *xs )
+{
+    const char *avx = getenv( "MADEIRA_FEX_AVX" );
+
+    if (!avx || avx[0] != '1') return;
+    memset( xs, 0, sizeof(*xs) );
+    xs->EnabledFeatures = xs->EnabledVolatileFeatures = (1 << XSTATE_LEGACY_FLOATING_POINT) |
+                                                        (1 << XSTATE_LEGACY_SSE) | (1 << XSTATE_AVX);
+    xs->AllFeatureSize = 0x340;  /* CPUID 0xd/0 EBX: 512 legacy + 64 header + 256 YMM_H */
+    xs->Features[0].Size = xs->AllFeatures[0] = offsetof( XSAVE_FORMAT, XmmRegisters );
+    xs->Features[1].Offset = xs->Features[0].Size;
+    xs->Features[1].Size = xs->AllFeatures[1] = sizeof(M128A) * 16;
+    xs->Features[XSTATE_AVX].Offset = 0x240;  /* CPUID 0xd/2 EBX */
+    xs->Features[XSTATE_AVX].Size = xs->AllFeatures[XSTATE_AVX] = 0x100;  /* CPUID 0xd/2 EAX */
+    /* as init_xstate_features computes it for a non-compacted layout */
+    xs->Size = offsetof( XSAVE_FORMAT, XmmRegisters ) + xs->Features[XSTATE_AVX].Offset + xs->Features[XSTATE_AVX].Size;
+    ERR( "[xstate] MADEIRA_FEX_AVX=1: XSTATE enabled %#llx size %#x (x87, SSE, AVX)\n",
+         (unsigned long long)xs->EnabledFeatures, (unsigned int)xs->Size );
+}
+
+
+/******************************************************************
  *		virtual_init_user_shared_data
  *
  * Initialize user shared data before running wineboot.
@@ -25493,6 +25524,7 @@ void virtual_init_user_shared_data(void)
     }
 
     init_shared_data_cpuinfo( data );
+    ios_init_emulated_avx_xstate( &data->XState );
     ios_pool_va_warn( "munmap", data, sizeof(*data) );
     munmap( data, sizeof(*data) );
 }
