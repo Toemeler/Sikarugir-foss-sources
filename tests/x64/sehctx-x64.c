@@ -69,6 +69,16 @@ typedef struct {
     ULONG64 stack_base, stack_limit;
     USHORT nbt;
     void *bt[16];
+    /* the rest of the context: what follows it (CONTEXT_EX on x64 Windows) and the
+     * XSTATE header that names, if any */
+    WORD seg[6];
+    DWORD ctx_mxcsr, flt_mxcsr, flt_mask;
+    WORD flt_cw, flt_sw;
+    BYTE flt_tw;
+    ULONG64 dr6, dr7, home[6];
+    DWORD ex[8];
+    int ex_readable, xs_readable;
+    ULONG64 xs_mask, xs_compaction;
 } snap_t;
 
 static snap_t g_snap;
@@ -119,6 +129,36 @@ static const char *where(ULONG64 a, char *out, size_t len)
     return out;
 }
 
+static int readable(const void *p, size_t len)
+{
+    MEMORY_BASIC_INFORMATION mbi;
+    if (!VirtualQuery(p, &mbi, sizeof(mbi)) || mbi.State != MEM_COMMIT) return 0;
+    if (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD)) return 0;
+    return (const char *)p + len <= (const char *)mbi.BaseAddress + mbi.RegionSize;
+}
+
+/* What follows the CONTEXT (x64 Windows: CONTEXT_EX, whose XState chunk locates the
+ * XSAVE header when ContextFlags has CONTEXT_XSTATE) and the rest of the context. */
+static void snap_context_rest(snap_t *s, const CONTEXT *c)
+{
+    const BYTE *after = (const BYTE *)(c + 1);
+    s->seg[0] = c->SegCs; s->seg[1] = c->SegDs; s->seg[2] = c->SegEs;
+    s->seg[3] = c->SegFs; s->seg[4] = c->SegGs; s->seg[5] = c->SegSs;
+    s->ctx_mxcsr = c->MxCsr;
+    s->flt_cw = c->FltSave.ControlWord; s->flt_sw = c->FltSave.StatusWord; s->flt_tw = c->FltSave.TagWord;
+    s->flt_mxcsr = c->FltSave.MxCsr; s->flt_mask = c->FltSave.MxCsr_Mask;
+    s->dr6 = c->Dr6; s->dr7 = c->Dr7;
+    s->home[0] = c->P1Home; s->home[1] = c->P2Home; s->home[2] = c->P3Home;
+    s->home[3] = c->P4Home; s->home[4] = c->P5Home; s->home[5] = c->P6Home;
+    s->ex_readable = readable(after, sizeof(s->ex));
+    if (s->ex_readable) memcpy(s->ex, after, sizeof(s->ex));
+    if (s->ex_readable && (c->ContextFlags & 0x40)) {  /* CONTEXT_XSTATE: ex[4] = XState.Offset */
+        const BYTE *xs = after + (LONG)s->ex[4];
+        s->xs_readable = readable(xs, 16);
+        if (s->xs_readable) { memcpy(&s->xs_mask, xs, 8); memcpy(&s->xs_compaction, xs + 8, 8); }
+    }
+}
+
 /* The handler the unwind info names: records the stack pointer, the return address,
  * EFlags, MXCSR and the x87 control word before any C code changes them. */
 EXCEPTION_DISPOSITION seh_handler(EXCEPTION_RECORD *r, void *frame, CONTEXT *c, DISPATCHER_CONTEXT *dc);
@@ -159,6 +199,7 @@ EXCEPTION_DISPOSITION seh_handler(EXCEPTION_RECORD *r, void *frame, CONTEXT *c, 
         if (dc->ContextRecord) { s->uw_rip = dc->ContextRecord->Rip; s->uw_rsp = dc->ContextRecord->Rsp; }
         s->stack_base = (ULONG64)tib->StackBase; s->stack_limit = (ULONG64)tib->StackLimit;
         s->nbt = RtlCaptureStackBackTrace(0, 16, s->bt, NULL);
+        snap_context_rest(s, c);
     }
 
     if (r->ExceptionCode != EXCEPTION_SINGLE_STEP) return ExceptionContinueSearch;
@@ -212,6 +253,42 @@ static void print_snap(const char *name)
        s->d.HistoryTable ? "set" : "null", s->d.ScopeIndex, s->d.Fill0, where(s->uw_rip, w4, sizeof(w4)),
        (LONG64)(s->uw_rsp - s->ctx_rsp));
     for (int i = 0; i < s->nbt; i++) lg("[%s]   bt#%d %s\n", name, i, where((ULONG64)s->bt[i], w1, sizeof(w1)));
+    lg("[%s] ctx seg cs=%x ds=%x es=%x fs=%x gs=%x ss=%x mxcsr=%08lx dr6=%llx dr7=%llx\n", name,
+       s->seg[0], s->seg[1], s->seg[2], s->seg[3], s->seg[4], s->seg[5], s->ctx_mxcsr, s->dr6, s->dr7);
+    lg("[%s] ctx fltsave cw=%04x sw=%04x tw=%02x mxcsr=%08lx mxcsr_mask=%08lx\n", name,
+       s->flt_cw, s->flt_sw, s->flt_tw, s->flt_mxcsr, s->flt_mask);
+    lg("[%s] ctx home p1=%llx p2=%llx p3=%llx p4=%llx p5=%llx p6=%llx\n", name,
+       s->home[0], s->home[1], s->home[2], s->home[3], s->home[4], s->home[5]);
+    if (s->ex_readable)
+        lg("[%s] after ctx (CONTEXT_EX on x64 Windows): All=%ld/%lx Legacy=%ld/%lx XState=%ld/%lx pad=%08lx %08lx\n",
+           name, (LONG)s->ex[0], s->ex[1], (LONG)s->ex[2], s->ex[3], (LONG)s->ex[4], s->ex[5], s->ex[6], s->ex[7]);
+    else
+        lg("[%s] after ctx: not readable\n", name);
+    if (s->ctx_flags & 0x40)
+        lg("[%s] xstate header: %s mask=%llx compaction=%llx\n", name, s->xs_readable ? "read" : "NOT readable",
+           s->xs_mask, s->xs_compaction);
+}
+
+/* The XSTATE features this process sees: CPUID, XCR0 and what the OS enables. */
+static void log_cpu(void)
+{
+    unsigned int a, b, c, d, b7 = 0;
+    unsigned long long xcr0 = 0;
+    DWORD64 (WINAPI *enabled)(void) = (void *)GetProcAddress(GetModuleHandleA("kernel32.dll"),
+                                                             "GetEnabledXStateFeatures");
+    __asm__ volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(1), "c"(0));
+    if (c & (1u << 27)) {  /* OSXSAVE */
+        unsigned int lo, hi;
+        __asm__ volatile("xgetbv" : "=a"(lo), "=d"(hi) : "c"(0));
+        xcr0 = ((unsigned long long)hi << 32) | lo;
+    }
+    {
+        unsigned int a7, c7, d7;
+        __asm__ volatile("cpuid" : "=a"(a7), "=b"(b7), "=c"(c7), "=d"(d7) : "a"(7), "c"(0));
+    }
+    lg("cpu: cpuid1 ecx=%08x (xsave=%u osxsave=%u avx=%u) cpuid7 ebx=%08x (avx2=%u) xcr0=%llx enabled-xstate=%llx\n",
+       c, (c >> 26) & 1, (c >> 27) & 1, (c >> 28) & 1, b7, (b7 >> 5) & 1, xcr0,
+       enabled ? (unsigned long long)enabled() : 0ull);
 }
 
 static void add_seh_table(void)
@@ -271,6 +348,7 @@ int main(void)
         g_fh = CreateFileA(path, GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     }
     lg("sehctx-x64: what a frame handler sees on a trap-flag single step\n");
+    log_cpu();
     g_buf = VirtualAlloc(NULL, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
     if (!g_buf) { lg("SETUP FAILED: VirtualAlloc %lu\n", GetLastError()); return 2; }
     memset(g_buf, 0xcc, 4096);
