@@ -1,0 +1,72 @@
+diff --git a/dlls/ntdll/signal_arm64ec.c b/dlls/ntdll/signal_arm64ec.c
+index 2cf5a07..d28b0cb 100644
+--- a/dlls/ntdll/signal_arm64ec.c
++++ b/dlls/ntdll/signal_arm64ec.c
+@@ -2684,6 +2684,56 @@ static DWORD __attribute__((naked)) call_seh_handler( EXCEPTION_RECORD *rec, ULO
+ }
+ 
+ 
++/***********************************************************************
++ *		call_x64_seh_handler   (iOS-Madeira)
++ *
++ * call_seh_handler for an x64 (guest) frame handler, with the return address it sees in
++ * ntdll's image. call_seh_handler goes through the compiler's exit thunk, and on iOS that
++ * thunk runs from its JIT-pool copy, so FEX's ExitToX64 pushed the pool address: the
++ * handler's return address was in no module (Windows 10: ntdll+a296f, inside
++ * RtlpExecuteHandlerForException), and a stack walk from the handler went nowhere
++ * (tests/x64/sehctx-x64.c "ret", "bt"). Copy protections check both: Seamless Co-op's
++ * ersc.dll (Themida) returns 0xffffffff from its handler instead of a disposition.
++ *
++ * This is the exit thunk written out, with lr set to the PE address of the continuation
++ * (xlate_ios_jit_rev of the pool address; identity when that hook is unset). The handler's
++ * ret then reaches 1: through FEX's ExitFunctionEC, which translates a PE target to its
++ * pool copy, and its unwind info is this function's. x64 gets 32 bytes of home space
++ * above its return address and an RSP that is 8 mod 16, as from a call.
++ */
++static DWORD __attribute__((naked)) call_x64_seh_handler( EXCEPTION_RECORD *rec, ULONG_PTR frame,
++                                                          CONTEXT *context, void *dispatch, PEXCEPTION_ROUTINE handler )
++{
++    asm( ".seh_proc call_x64_seh_handler\n\t"
++         "stp x29, x30, [sp, #-16]!\n\t"
++         ".seh_save_fplr_x 16\n\t"
++         "sub sp, sp, #0x30\n\t"
++         ".seh_stackalloc 0x30\n\t"
++         ".seh_endprologue\n\t"
++         ".seh_handler nested_exception_handler, @except\n\t"
++         "stp x0, x1, [sp]\n\t"
++         "stp x2, x3, [sp, #16]\n\t"
++         "str x4, [sp, #32]\n\t"
++         "adr x0, 1f\n\t"            /* where the handler returns to, as this code runs */
++         "adrp x16, p_ios_jit_reverse_translate_addr\n\t"
++         "ldr x16, [x16, #:lo12:p_ios_jit_reverse_translate_addr]\n\t"
++         "cbz x16, 2f\n\t"
++         "blr x16\n"                 /* x0 = its PE address */
++         "2:\tmov x30, x0\n\t"
++         "ldp x0, x1, [sp]\n\t"      /* rcx, rdx */
++         "ldp x2, x3, [sp, #16]\n\t" /* r8, r9 */
++         "ldr x9, [sp, #32]\n\t"     /* the x64 handler */
++         "adrp x16, __os_arm64x_dispatch_call_no_redirect\n\t"
++         "ldr x16, [x16, #:lo12:__os_arm64x_dispatch_call_no_redirect]\n\t"
++         "br x16\n"                  /* ExitToX64 pushes lr and enters the handler */
++         "1:\tmov x0, x8\n\t"        /* rax */
++         "add sp, sp, #0x30\n\t"
++         "ldp x29, x30, [sp], #16\n\t"
++         "ret\n\t"
++         ".seh_endproc" );
++}
++
++
+ /**********************************************************************
+  *           ios_seh_xlate_note   (iOS-Madeira ml603)
+  *
+@@ -3539,8 +3589,8 @@ NTSTATUS call_seh_handlers( EXCEPTION_RECORD *rec, CONTEXT *orig_context )
+                     DWORD efl = c->EFlags, cflags = c->ContextFlags;
+                     LONG n;
+ 
+-                    res = call_seh_handler( rec, dispatch.EstablisherFrame, orig_context,
+-                                            &dispatch, handler );
++                    res = call_x64_seh_handler( rec, dispatch.EstablisherFrame, orig_context,
++                                                &dispatch, handler );
+                     n = InterlockedIncrement( &guest_n );
+                     if (n <= 64 || (res > ExceptionCollidedUnwind && InterlockedIncrement( &bad_n ) <= 16))
+                         ERR( "[guest-seh] #%d handler=%p code=%08x addr=%p flags=%x frame=%p -> res=%#x | "

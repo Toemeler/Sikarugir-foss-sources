@@ -20,6 +20,8 @@ B="$R/wine/build-arm64ec"
 #                       context come back in its exception contexts (tests/x64/tfstep-x64.c "drrt")
 #   0002-arm64ec-guest-seh-log-dr6  log what an x64 frame handler returns and does to its context
 #                       ([guest-seh]); Dr6 reads ffff0ff0 while Dr7 is armed, as on Windows 10
+#   0003-arm64ec-x64-handler-returns-into-ntdll  an x64 frame handler's return address is in
+#                       ntdll's image, not its JIT-pool copy (tests/x64/sehctx-x64.c "ret", "bt")
 for P in "$R"/build/wine-pe/patches/*.patch; do
     [ -e "$P" ] || continue
     if git -C "$R/wine" apply --reverse --check "$P" 2>/dev/null; then

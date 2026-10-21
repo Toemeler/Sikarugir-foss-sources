@@ -127,3 +127,7 @@ signed off under the DCO (the fork's `CONTRIBUTING.md`):
   plus build/wine-pe/patches/0001-arm64ec-x64-debug-registers.patch, which
   build/wine-pe/build-ntdll.sh applies, and 0002-arm64ec-guest-seh-log-dr6.patch
   (a [guest-seh] log of x64 frame handlers; Dr6 reserved bits while Dr7 is armed).
+- 2026-10-21 author Toemeler: ntdll ARM64EC: an x64 frame handler returns into
+  ntdll's image, not its JIT-pool copy. Not a commit in the fork either:
+  build/wine-pe/patches/0003-arm64ec-x64-handler-returns-into-ntdll.patch, on top
+  of 0001 and 0002, in the same shipped ntdll.dll.
