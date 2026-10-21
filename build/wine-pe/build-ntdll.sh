@@ -22,6 +22,8 @@ B="$R/wine/build-arm64ec"
 #                       ([guest-seh]); Dr6 reads ffff0ff0 while Dr7 is armed, as on Windows 10
 #   0003-arm64ec-x64-handler-returns-into-ntdll  an x64 frame handler's return address is in
 #                       ntdll's image, not its JIT-pool copy (tests/x64/sehctx-x64.c "ret", "bt")
+#   0004-ntdll-call-vectored-continue-handlers  vectored continue handlers run once an exception
+#                       is continued, as on Windows (tests/x64/sehctx-x64.c "veh+vch")
 # How many of them the tree already has, in order: undo them newest first on a
 # scratch copy of the files they touch until that works. Checking each patch on its
 # own fails for 0001 once 0002 is applied (they touch neighbouring lines).

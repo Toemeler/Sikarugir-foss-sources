@@ -1,0 +1,79 @@
+diff --git a/dlls/ntdll/exception.c b/dlls/ntdll/exception.c
+index e90eb01..e68671a 100644
+--- a/dlls/ntdll/exception.c
++++ b/dlls/ntdll/exception.c
+@@ -274,6 +274,57 @@ static LONG call_vectored_handlers( EXCEPTION_RECORD *rec, CONTEXT *context )
+ }
+ 
+ 
++/**********************************************************************
++ *           call_vectored_continue_handlers   (iOS-Madeira)
++ *
++ * Call the vectored continue handlers, as Windows does once a vectored or a frame
++ * handler has continued the exception, until one returns EXCEPTION_CONTINUE_EXECUTION.
++ * Wine kept the list (RtlAddVectoredContinueHandler) but never called it
++ * (tests/x64/sehctx-x64.c "veh+vch": Windows 10 calls veh, frame, vch).
++ */
++static void call_vectored_continue_handlers( EXCEPTION_RECORD *rec, CONTEXT *context )
++{
++    EXCEPTION_POINTERS except_ptrs;
++    PVECTORED_EXCEPTION_HANDLER func;
++    VECTORED_HANDLER *handler, *to_free = NULL;
++    PLIST_ENTRY mark, entry;
++    LONG ret;
++
++    except_ptrs.ExceptionRecord = rec;
++    except_ptrs.ContextRecord = context;
++
++    RtlEnterCriticalSection( &vectored_handlers_section );
++
++    mark = &vectored_continue_handlers;
++    entry = mark->Flink;
++    while (entry != mark)
++    {
++        handler = CONTAINING_RECORD( entry, VECTORED_HANDLER, entry );
++        entry = entry->Flink;
++        ++*handler->count;
++        func = RtlDecodePointer( handler->func );
++        RtlLeaveCriticalSection( &vectored_handlers_section );
++        RtlFreeHeap( GetProcessHeap(), 0, to_free );
++        to_free = NULL;
++
++        TRACE( "calling continue handler at %p code=%lx flags=%lx\n",
++               func, rec->ExceptionCode, rec->ExceptionFlags );
++        ret = func( &except_ptrs );
++        TRACE( "continue handler at %p returned %lx\n", func, ret );
++
++        RtlEnterCriticalSection( &vectored_handlers_section );
++        if (!--*handler->count)  /* removed during execution */
++        {
++            RemoveEntryList( &handler->entry );
++            to_free = handler;
++        }
++        if (ret == EXCEPTION_CONTINUE_EXECUTION) break;
++    }
++    RtlLeaveCriticalSection( &vectored_handlers_section );
++    RtlFreeHeap( GetProcessHeap(), 0, to_free );
++}
++
++
+ #ifdef __aarch64__
+ /* iOS-Madeira, WoW64 guest window — DEFENCE IN DEPTH ONLY.  Built into the
+  * native ARM64 ntdll, which is the WoW64 host on this port; the ARM64EC and
+@@ -432,10 +483,16 @@ NTSTATUS WINAPI dispatch_exception( EXCEPTION_RECORD *rec, CONTEXT *context )
+     }
+ 
+     if (call_vectored_handlers( rec, context ) == EXCEPTION_CONTINUE_EXECUTION)
++    {
++        call_vectored_continue_handlers( rec, context );
+         NtContinue( context, FALSE );
++    }
+ 
+     if ((status = call_seh_handlers( rec, context )) == STATUS_SUCCESS)
++    {
++        call_vectored_continue_handlers( rec, context );
+         NtContinue( context, FALSE );
++    }
+ 
+     if (status != STATUS_UNHANDLED_EXCEPTION) RtlRaiseStatus( status );
+     return NtRaiseException( rec, context, FALSE );

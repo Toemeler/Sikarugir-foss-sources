@@ -130,4 +130,6 @@ signed off under the DCO (the fork's `CONTRIBUTING.md`):
 - 2026-10-21 author Toemeler: ntdll ARM64EC: an x64 frame handler returns into
   ntdll's image, not its JIT-pool copy. Not a commit in the fork either:
   build/wine-pe/patches/0003-arm64ec-x64-handler-returns-into-ntdll.patch, on top
-  of 0001 and 0002, in the same shipped ntdll.dll.
+  of 0001 and 0002, in the same shipped ntdll.dll; and 0004-ntdll-call-vectored-
+  continue-handlers.patch: vectored continue handlers run once an exception is
+  continued, as on Windows.
