@@ -26,6 +26,9 @@ B="$R/wine/build-arm64ec"
 #                       is continued, as on Windows (tests/x64/sehctx-x64.c "veh+vch")
 #   0005-arm64ec-walk-frame-chain-in-pe-space  RtlWalkFrameChain (RtlCaptureStackBackTrace)
 #                       walks and reports PE addresses, not JIT-pool ones (tests/x64/sehctx-x64.c "bt")
+#   0006-arm64ec-exception-frame-as-on-x64-windows  the record at context + 0x4f0, a CONTEXT_EX
+#                       after the context, FltSave.MxCsr_Mask ffff, NZCV clear before an x64 handler
+#                       (tests/x64/sehctx-x64.c "args", "after ctx", "fltsave", "entry rfl")
 # How many of them the tree already has, in order: undo them newest first on a
 # scratch copy of the files they touch until that works. Checking each patch on its
 # own fails for 0001 once 0002 is applied (they touch neighbouring lines).

@@ -24,6 +24,9 @@ B="$R/FEX/build-arm64ec"
 #                       (tests/x64/tfstep-x64.c "fault")
 #   0004-x87-state-across-exceptions  a guest exception's context carries the x87 state, and
 #                       NtContinue no longer zeroes it (tests/x64/sehctx-x64.c "fpcw")
+#   0005-exit-to-x64-keeps-guest-flags  ExitToX64's iOS FFS check keeps the caller's NZCV (the
+#                       x64 flags), so an x64 handler no longer starts with its compare's flags
+#                       (tests/x64/sehctx-x64.c "entry rfl")
 for P in "$R"/build/fex-arm64ec/patches/*.patch; do
     [ -e "$P" ] || continue
     if git -C "$R/FEX" apply --reverse --check "$P" 2>/dev/null; then

@@ -1,0 +1,33 @@
+diff --git a/Source/Windows/ARM64EC/Module.S b/Source/Windows/ARM64EC/Module.S
+--- a/Source/Windows/ARM64EC/Module.S
++++ b/Source/Windows/ARM64EC/Module.S
+@@ -119,6 +119,12 @@
+   // from the native sp on every JIT entry. The `br` targets the PE VA; the Mach
+   // exec-fault redirect translates it to the pool copy (proven ~33us path, and this
+   // is RPC-call frequency, not per-frame).
++  //
++  // NZCV are the x64 caller's flags here and the cmp below would replace them: a guest SEH
++  // handler entered through ExitToX64 saw the pattern compare's flags (tests/x64/sehctx-x64.c
++  // "entry rfl" 283, Windows 10 202). Keep them on the stack until the emulated path enters the JIT.
++  mrs x16, nzcv
++  str x16, [sp, #-16]!
+   ldr x16, [x9]
+   movz x17, #0x8b48
+   movk x17, #0x48c4, lsl #16
+@@ -189,6 +195,7 @@
+   add x23, x23, #1
+   str x23, [x16]         // [0] = bypass count (diagnostic, read by Core.cpp reporter)
+   str x17, [x16, #8]     // [1] = last EC target taken natively
++  add sp, sp, #16        // the saved NZCV: a native EC call does not take x64 flags
+   br x17                 // PE VA; the Mach exec-fault redirect maps it to the pool copy
+ ios_ffs_reject:
+   // Pattern matched but the (PE-space) target is not EC per the bitmap: fall
+@@ -204,6 +211,8 @@
+   str x17, [x16, #24]    // [3] = last rejected (PE-space) target
+ ios_ffs_no_bypass:
+   IOS_XP_COUNT 2112, x16, x17   // ml1131: EC->x64 call (callback) emulated
++  ldr x16, [sp], #16     // the caller's NZCV, saved above: the x64 flags the JIT enters with
++  msr nzcv, x16
+ #endif
+   str lr, [sp, #-8]! // Push return address to stack, this will be popped by the x86 RET instr.
+ 

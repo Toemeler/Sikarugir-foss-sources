@@ -1,0 +1,75 @@
+diff --git a/dlls/ntdll/signal_arm64ec.c b/dlls/ntdll/signal_arm64ec.c
+--- a/dlls/ntdll/signal_arm64ec.c
++++ b/dlls/ntdll/signal_arm64ec.c
+@@ -2723,6 +2723,8 @@
+          "ldp x0, x1, [sp]\n\t"      /* rcx, rdx */
+          "ldp x2, x3, [sp, #16]\n\t" /* r8, r9 */
+          "ldr x9, [sp, #32]\n\t"     /* the x64 handler */
++         "msr nzcv, xzr\n\t"         /* its EFlags at entry: ExitToX64 maps NZCV into them; Windows
++                                         10 enters with 202 (sehctx "entry rfl"), here it was 283 */
+          "adrp x16, __os_arm64x_dispatch_call_no_redirect\n\t"
+          "ldr x16, [x16, #:lo12:__os_arm64x_dispatch_call_no_redirect]\n\t"
+          "br x16\n"                  /* ExitToX64 pushes lr and enters the handler */
+@@ -3708,11 +3710,33 @@
+ }
+ 
+ 
+-static void * __attribute__((used)) prepare_exception_arm64ec( EXCEPTION_RECORD *rec, ARM64EC_NT_CONTEXT *context, ARM64_NT_CONTEXT *arm_ctx )
++static void * __attribute__((used)) prepare_exception_arm64ec( EXCEPTION_RECORD *rec, ARM64EC_NT_CONTEXT *context, ARM64_NT_CONTEXT *arm_ctx,
++                                                               EXCEPTION_RECORD *rec_copy )
+ {
+     if (rec->ExceptionCode == STATUS_EMULATION_SYSCALL) dispatch_syscall( arm_ctx );
++    /* iOS-Madeira: x64 Windows gives handlers a CONTEXT, a CONTEXT_EX-sized gap and the
++     * EXCEPTION_RECORD right after it (record = context + 0x4f0, tests/x64/sehctx-x64.c
++     * "args"); here the ARM64 context sat in between (record = context + 0x880), and
++     * Seamless Co-op's ersc.dll (Themida) returns 0xffffffff from its handler. Dispatch a
++     * copy of the record where x64 Windows has it; KiUserExceptionDispatcher reserves it. */
++    memset( (char *)context + sizeof(*context), 0, (char *)rec_copy - ((char *)context + sizeof(*context)) );
++    *rec_copy = *rec;
++    rec = rec_copy;
+     context_arm_to_x64( context, arm_ctx );
+     load_x64_debug_regs( &context->AMD64_Context );
++    /* iOS-Madeira: x64 Windows follows an exception's context with its CONTEXT_EX (no XSTATE
++     * here: the guest's CPUID has no XSAVE; values as RtlInitializeExtendedContext2 gives
++     * them) and reports the FXSAVE MXCSR mask (tests/x64/sehctx-x64.c "after ctx",
++     * "fltsave": Windows 10 0000ffff, here 0). */
++    {
++        CONTEXT_EX *c_ex = (CONTEXT_EX *)(&context->AMD64_Context + 1);
++        c_ex->All.Offset = c_ex->Legacy.Offset = -(LONG)sizeof(context->AMD64_Context);
++        c_ex->All.Length = sizeof(context->AMD64_Context) + 24;
++        c_ex->Legacy.Length = sizeof(context->AMD64_Context);
++        c_ex->XState.Offset = 25;
++        c_ex->XState.Length = 0;
++        context->AMD64_Context.FltSave.MxCsr_Mask = 0xffff;
++    }
+     /* iOS-Madeira task#34 probe: FEX's LogMan output is invisible on iOS (its
+      * write(2) resolves to the PE CRT's WriteFile → unplumbed std handle),
+      * so trace the guest-exception conversion from the wine side. Rate-
+@@ -4134,12 +4158,14 @@
+ {
+     asm( ".seh_proc \"#KiUserExceptionDispatcher\"\n\t"
+          ".seh_context\n\t"
+-         "sub sp, sp, #0x4d0\n\t"       /* sizeof(ARM64EC_NT_CONTEXT) */
+-         ".seh_stackalloc 0x4d0\n\t"
++         "sub sp, sp, #0x590\n\t"       /* sizeof(ARM64EC_NT_CONTEXT), 0x20 as CONTEXT_EX, the
++                                           record copy (iOS-Madeira: x64 Windows' layout) */
++         ".seh_stackalloc 0x590\n\t"
+          ".seh_endprologue\n\t"
+-         "add x0, sp, #0x3b0+0x4d0\n\t" /* rec */
++         "add x0, sp, #0x3b0+0x590\n\t" /* rec as delivered */
+          "mov x1, sp\n\t"               /* context */
+-         "add x2, sp, #0x4d0\n\t"       /* arm_ctx (context + 1) */
++         "add x2, sp, #0x590\n\t"       /* arm_ctx */
++         "add x3, sp, #0x4f0\n\t"       /* rec, dispatched from here */
+          "bl \"#prepare_exception_arm64ec\"\n\t"
+          "cbz x0, 1f\n\t"
+          /* bypass exit thunk to avoid messing up the stack */
+@@ -4155,7 +4181,7 @@
+          "cbz x16, 1f\n\t"
+          "mov x9, x0\n\t"
+          "blr x16\n"
+-         "1:\tadd x0, sp, #0x3b0+0x4d0\n\t" /* rec */
++         "1:\tadd x0, sp, #0x4f0\n\t"       /* rec (the copy) */
+          "mov x1, sp\n\t"                   /* context */
+          "bl #dispatch_exception\n\t"
+          "brk #1\n\t"
