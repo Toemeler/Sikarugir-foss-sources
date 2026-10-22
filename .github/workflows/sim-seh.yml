@@ -321,7 +321,8 @@ jobs:
           path: |
             tests/sim-harness/out/logs
             tests/sim-harness/out/stubs.txt
-            tests/sim-harness/out/link1.err
+            tests/sim-harness/out/link.err
+            tests/sim-harness/out/renamed.txt
             tests/sim-harness/out/obj/*.err
           if-no-files-found: ignore
           retention-days: 7
