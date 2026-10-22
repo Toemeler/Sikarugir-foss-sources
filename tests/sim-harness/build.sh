@@ -52,7 +52,7 @@ for src in "${SOURCES[@]}"; do
     name=$(basename "$src"); name="${name%.*}"
     extra=()
     case "$src" in *.m) extra=("${OBJCFLAGS[@]}") ;; esac
-    if "${CC[@]}" "${CFLAGS[@]}" "${extra[@]}" -c "$src" -o "$OBJ/$name.o" 2>"$OBJ/$name.err"; then
+    if "${CC[@]}" "${CFLAGS[@]}" ${extra[@]+"${extra[@]}"} -c "$src" -o "$OBJ/$name.o" 2>"$OBJ/$name.err"; then
         echo "  $name OK"
     else
         echo "  $name FAILED"; grep -m 20 -B 2 -A 3 'error:' "$OBJ/$name.err" || head -40 "$OBJ/$name.err"
