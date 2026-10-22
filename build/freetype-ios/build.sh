@@ -7,6 +7,13 @@
 #   git clone --depth 1 --branch VER-2-13-3 https://github.com/freetype/freetype.git research/freetype
 # All optional deps disabled — fonts are plain TTFs from wine/fonts/.
 set -e
+# MAD_SDK picks the iOS SDK: iphoneos (the app) or iphonesimulator (the
+# simulator test harness, .github/workflows/sim-seh.yml).
+MAD_SDK="${MAD_SDK:-iphoneos}"
+case "$MAD_SDK" in
+    iphonesimulator) MAD_MIN=-mios-simulator-version-min=17.0 ;;
+    *) MAD_MIN=-miphoneos-version-min=17.0 ;;
+esac
 
 BUILD_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$BUILD_DIR/../.." && pwd)"
@@ -18,7 +25,7 @@ cmake -S "$SRC" -B "$BUILD_DIR/build" -G "Unix Makefiles" \
   -DCMAKE_SYSTEM_NAME=iOS \
   -DCMAKE_OSX_ARCHITECTURES=arm64 \
   -DCMAKE_OSX_DEPLOYMENT_TARGET=17.0 \
-  -DCMAKE_OSX_SYSROOT="$(xcrun --sdk iphoneos --show-sdk-path)" \
+  -DCMAKE_OSX_SYSROOT="$(xcrun --sdk "$MAD_SDK" --show-sdk-path)" \
   -DCMAKE_BUILD_TYPE=Release \
   -DBUILD_SHARED_LIBS=OFF \
   -DFT_DISABLE_ZLIB=ON -DFT_DISABLE_BZIP2=ON -DFT_DISABLE_PNG=ON \

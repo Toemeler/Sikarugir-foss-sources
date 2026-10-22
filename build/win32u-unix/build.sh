@@ -7,13 +7,20 @@
 # deps (freetype, fontconfig, egl, vulkan) forced undefined for now;
 # those code paths fall back to stubs.
 set -e
+# MAD_SDK picks the iOS SDK: iphoneos (the app) or iphonesimulator (the
+# simulator test harness, .github/workflows/sim-seh.yml).
+MAD_SDK="${MAD_SDK:-iphoneos}"
+case "$MAD_SDK" in
+    iphonesimulator) MAD_MIN=-mios-simulator-version-min=17.0 ;;
+    *) MAD_MIN=-miphoneos-version-min=17.0 ;;
+esac
 
 BUILD_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$BUILD_DIR/../.." && pwd)"
 WINE_SRC="$REPO_ROOT/wine"
 WINE_BUILD="$WINE_SRC/build-macos"
 NTDLL_SHIMS="$REPO_ROOT/build/ntdll-unix/shims"
-SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+SDK=$(xcrun --sdk "$MAD_SDK" --show-sdk-path)
 OBJ_DIR="$BUILD_DIR/obj"
 APP_LIB="$REPO_ROOT/app/Madeira/libwin32u_unix.a"
 
@@ -31,8 +38,8 @@ compile_one() {
     shift 2
     echo -n "  $name... "
 
-    if xcrun -sdk iphoneos clang \
-        -arch arm64 -isysroot "$SDK" -miphoneos-version-min=17.0 \
+    if xcrun -sdk "$MAD_SDK" clang \
+        -arch arm64 -isysroot "$SDK" $MAD_MIN \
         -O2 -fPIC -fvisibility=hidden -fno-stack-protector -fno-strict-aliasing \
         -Wno-implicit-function-declaration -Wno-int-conversion \
         -include "$BUILD_DIR/config_ios.h" \

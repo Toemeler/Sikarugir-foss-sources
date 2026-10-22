@@ -1,10 +1,17 @@
 #!/bin/bash
 set -e
+# MAD_SDK picks the iOS SDK: iphoneos (the app) or iphonesimulator (the
+# simulator test harness, .github/workflows/sim-seh.yml).
+MAD_SDK="${MAD_SDK:-iphoneos}"
+case "$MAD_SDK" in
+    iphonesimulator) MAD_MIN=-mios-simulator-version-min=17.0 ;;
+    *) MAD_MIN=-miphoneos-version-min=17.0 ;;
+esac
 
 BUILD_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$BUILD_DIR/../.." && pwd)"
 WINE_SRC="$REPO_ROOT/wine"
-SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+SDK=$(xcrun --sdk "$MAD_SDK" --show-sdk-path)
 APP_LIB="$REPO_ROOT/app/Madeira/libwineserver.a"
 SHIMS_DIR="$REPO_ROOT/build/ntdll-unix/shims"
 
@@ -20,7 +27,7 @@ if [ ! -f "$OBJ_DIR/libwineserver.a" ] && [ -f "$APP_LIB" ]; then
 fi
 
 CC_FLAGS=(
-    -arch arm64 -isysroot "$SDK" -miphoneos-version-min=17.0 -O2
+    -arch arm64 -isysroot "$SDK" $MAD_MIN -O2
     -I"$WINE_SRC/include" -I"$WINE_SRC/include/wine"
     -I"$WINE_SRC/build-macos/include"
     -I"$BUILD_DIR" -I"$WINE_SRC/server"
@@ -46,7 +53,7 @@ compile_one() {
     local src=$1
     local name=$2
     echo -n "  $name... "
-    if xcrun -sdk iphoneos clang "${CC_FLAGS[@]}" -c "$src" -o "$OBJ_DIR/$name.o" 2>"$OBJ_DIR/err-$name.txt"; then
+    if xcrun -sdk "$MAD_SDK" clang "${CC_FLAGS[@]}" -c "$src" -o "$OBJ_DIR/$name.o" 2>"$OBJ_DIR/err-$name.txt"; then
         echo "OK"
     else
         echo "FAILED (see $OBJ_DIR/err-$name.txt)"
@@ -114,9 +121,9 @@ PATCHED_FILES=(
 echo "=== Building kill wrapper (without kill macro) ==="
 echo -n "  wineserver_ios_kill... "
 # Compile WITHOUT -include wineserver_ios_kill.h to avoid recursive macro
-KILL_FLAGS=(-arch arm64 -isysroot "$SDK" -miphoneos-version-min=17.0 -O2
+KILL_FLAGS=(-arch arm64 -isysroot "$SDK" $MAD_MIN -O2
     -I"$BUILD_DIR" -DWINE_IOS=1 -Wno-implicit-function-declaration)
-if xcrun -sdk iphoneos clang "${KILL_FLAGS[@]}" -c "$BUILD_DIR/wineserver_ios_kill.c" -o "$OBJ_DIR/wineserver_ios_kill.o" 2>"$OBJ_DIR/err-kill.txt"; then
+if xcrun -sdk "$MAD_SDK" clang "${KILL_FLAGS[@]}" -c "$BUILD_DIR/wineserver_ios_kill.c" -o "$OBJ_DIR/wineserver_ios_kill.o" 2>"$OBJ_DIR/err-kill.txt"; then
     echo "OK"
 else
     echo "FAILED"; cat "$OBJ_DIR/err-kill.txt"; exit 1
@@ -203,7 +210,7 @@ if [ ! -f "$OBJ_DIR/libwineserver.a" ]; then
         done
         [ $replaced = 1 ] && continue
         echo -n "  $name... "
-        if xcrun -sdk iphoneos clang "${CC_FLAGS[@]}" -c "$src" -o "$BASE_DIR/$name.o" 2>"$OBJ_DIR/err-base-$name.txt"; then
+        if xcrun -sdk "$MAD_SDK" clang "${CC_FLAGS[@]}" -c "$src" -o "$BASE_DIR/$name.o" 2>"$OBJ_DIR/err-base-$name.txt"; then
             echo "OK"
         else
             echo "FAILED (see $OBJ_DIR/err-base-$name.txt)"

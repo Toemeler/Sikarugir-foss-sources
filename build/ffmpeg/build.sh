@@ -43,6 +43,13 @@
 # Re-runnable: configure runs again only when the configure arguments change
 # (they are stamped into the build tree) or when --reconfigure is passed.
 set -euo pipefail
+# MAD_SDK picks the iOS SDK: iphoneos (the app) or iphonesimulator (the
+# simulator test harness, .github/workflows/sim-seh.yml).
+MAD_SDK="${MAD_SDK:-iphoneos}"
+case "$MAD_SDK" in
+    iphonesimulator) MAD_MIN=-mios-simulator-version-min=17.0 ;;
+    *) MAD_MIN=-miphoneos-version-min=17.0 ;;
+esac
 
 BUILD_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$BUILD_DIR/../.." && pwd)"
@@ -64,7 +71,7 @@ for a in "$@"; do
     esac
 done
 
-SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+SDK=$(xcrun --sdk "$MAD_SDK" --show-sdk-path)
 JOBS=$(sysctl -n hw.ncpu)
 
 # ------------------------------------------------------------------ verify
@@ -89,7 +96,7 @@ if [ ! -f "$SRC/configure" ]; then
 fi
 
 # ------------------------------------------------------------------ configure
-HOSTFLAGS="-arch arm64 -isysroot $SDK -miphoneos-version-min=17.0"
+HOSTFLAGS="-arch arm64 -isysroot $SDK $MAD_MIN"
 CONFIG_ARGS=(
     --prefix="$PREFIX"
     --enable-cross-compile
@@ -97,12 +104,12 @@ CONFIG_ARGS=(
     --cpu=generic
     --target-os=darwin
     --sysroot="$SDK"
-    --cc="$(xcrun -sdk iphoneos -f clang)"
-    --cxx="$(xcrun -sdk iphoneos -f clang++)"
-    --ar="$(xcrun -sdk iphoneos -f ar)"
-    --ranlib="$(xcrun -sdk iphoneos -f ranlib)"
-    --nm="$(xcrun -sdk iphoneos -f nm) -g"
-    --strip="$(xcrun -sdk iphoneos -f strip)"
+    --cc="$(xcrun -sdk "$MAD_SDK" -f clang)"
+    --cxx="$(xcrun -sdk "$MAD_SDK" -f clang++)"
+    --ar="$(xcrun -sdk "$MAD_SDK" -f ar)"
+    --ranlib="$(xcrun -sdk "$MAD_SDK" -f ranlib)"
+    --nm="$(xcrun -sdk "$MAD_SDK" -f nm) -g"
+    --strip="$(xcrun -sdk "$MAD_SDK" -f strip)"
     "--extra-cflags=$HOSTFLAGS -fno-stack-protector -fvisibility=hidden -O2"
     "--extra-ldflags=$HOSTFLAGS"
     --disable-gpl

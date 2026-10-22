@@ -1,0 +1,162 @@
+# Off-device test loop: Madeira's FEX + ARM64EC-Wine stack built for the iOS
+# Simulator (arm64 on the Apple-silicon macos-26 runners), so exception-path
+# fixes can be checked without a device.
+#
+# Every native library is built with MAD_SDK=iphonesimulator (the build scripts
+# default to iphoneos, so the release build in build.yml is unchanged).
+#
+#   fex-sim   FEXCore static libraries for the simulator SDK.
+#   unix-sim  GnuTLS/FFmpeg/FreeType, Wine's configure, then the ntdll,
+#             wineserver and win32u unix sides for the simulator SDK.
+
+name: Simulator SEH harness
+
+on:
+  push:
+    branches: [codex/sim-seh-20261022]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  MAD_SDK: iphonesimulator
+  MINGW: llvm-mingw-20260421-ucrt-macos-universal
+  MINGW_SHA256: bd85a3975723815cef28dbbd2ca2cb0c926f6b348a12a0453f39f7af273cb3f7
+  FREETYPE_TAG: VER-2-13-3
+
+concurrency:
+  group: sim-seh-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fex-sim:
+    name: FEXCore (iphonesimulator)
+    runs-on: macos-26
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: |
+          NEWEST=$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | tail -1 || true)
+          if [ -n "$NEWEST" ]; then sudo xcode-select -s "$NEWEST"; fi
+          xcodebuild -version
+          xcrun --sdk iphonesimulator --show-sdk-path
+      - name: FEX source
+        run: git submodule update --init --recursive --depth 1 --jobs 4 -- FEX
+      - name: "Cache: FEX (sim)"
+        id: c-fex
+        uses: actions/cache@v4
+        with:
+          key: fex-sim-v1-${{ hashFiles('build/fex-ios/build.sh') }}-${{ github.sha }}
+          restore-keys: fex-sim-v1-${{ hashFiles('build/fex-ios/build.sh') }}-
+          path: |
+            FEX/build-ios
+            !FEX/build-ios/**/CMakeFiles/**
+      - name: Build FEXCore
+        run: |
+          set -euo pipefail
+          command -v ninja >/dev/null || brew install ninja
+          build/fex-ios/build.sh
+          for a in $(find FEX/build-ios -name '*.a'); do
+            echo "$a: $(xcrun vtool -show-build "$a" 2>/dev/null | grep -m1 -E 'platform' || true)"
+          done
+
+  unix-sim:
+    name: Wine unix side (iphonesimulator)
+    runs-on: macos-26
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: |
+          set -euo pipefail
+          NEWEST=$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | tail -1 || true)
+          if [ -n "$NEWEST" ]; then sudo xcode-select -s "$NEWEST"; fi
+          xcodebuild -version
+          xcrun --sdk iphonesimulator --show-sdk-path
+          brew install bison flex gnutls freetype pkgconf
+          mkdir -p toolchains
+          curl -fsSL --retry 3 -o "toolchains/$MINGW.tar.xz" \
+            "https://github.com/mstorsjo/llvm-mingw/releases/download/20260421/$MINGW.tar.xz"
+          echo "$MINGW_SHA256  toolchains/$MINGW.tar.xz" | shasum -a 256 -c -
+          tar -xJf "toolchains/$MINGW.tar.xz" -C toolchains
+          rm "toolchains/$MINGW.tar.xz"
+          git clone -q --depth 1 --branch "$FREETYPE_TAG" https://github.com/freetype/freetype.git research/freetype
+      - name: Wine source
+        run: git submodule update --init --recursive --depth 1 --jobs 4 -- wine
+
+      - name: "Cache: GnuTLS (sim)"
+        id: c-gnutls
+        uses: actions/cache@v4
+        with:
+          key: gnutls-sim-v1-${{ hashFiles('build/gnutls-ios/**') }}
+          path: toolchains/gnutls-ios
+      - name: GMP, Nettle, GnuTLS
+        if: steps.c-gnutls.outputs.cache-hit != 'true'
+        run: build/gnutls-ios/build.sh > gnutls.log 2>&1 || { tail -80 gnutls.log; exit 1; }
+
+      - name: "Cache: FFmpeg (sim)"
+        id: c-ffmpeg
+        uses: actions/cache@v4
+        with:
+          key: ffmpeg-sim-v1-${{ hashFiles('build/ffmpeg/**') }}
+          path: |
+            toolchains/ffmpeg-ios
+            app/Madeira/libavformat.a
+            app/Madeira/libavcodec.a
+            app/Madeira/libswresample.a
+            app/Madeira/libavutil.a
+      - name: FFmpeg
+        if: steps.c-ffmpeg.outputs.cache-hit != 'true'
+        run: build/ffmpeg/build.sh > ffmpeg.log 2>&1 || { tail -80 ffmpeg.log; exit 1; }
+
+      - name: FreeType
+        run: build/freetype-ios/build.sh > freetype.log 2>&1 || { tail -80 freetype.log; exit 1; }
+
+      - name: Wine (configure)
+        run: .github/scripts/configure_wine.sh
+
+      - name: ntdll unix side
+        id: ntdll
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          build/ntdll-unix/build.sh 2>&1 | tee ntdll.log || true
+          grep -q '^Results: [0-9]* succeeded, 0 failed' ntdll.log
+      - name: wineserver
+        id: wineserver
+        continue-on-error: true
+        run: PATH="$PATH:$PWD/toolchains/$MINGW/bin" build/wineserver/build.sh
+      - name: win32u unix side
+        id: win32u
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          build/win32u-unix/build.sh 2>&1 | tee win32u.log || true
+          ! grep -q 'FAILED' win32u.log
+
+      - name: Collect logs
+        if: always()
+        run: |
+          mkdir -p logs
+          cp *.log logs/ 2>/dev/null || true
+          for d in ntdll-unix wineserver win32u-unix; do
+            mkdir -p "logs/$d"
+            find "build/$d/obj" -maxdepth 1 \( -name '*.err' -o -name 'err-*' \) -size +0 \
+              -exec cp {} "logs/$d/" \; 2>/dev/null || true
+          done
+          ls -l app/Madeira/libntdll_unix.a app/Madeira/libwineserver.a app/Madeira/libwin32u_unix.a 2>&1 || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: unix-sim-logs
+          path: logs
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Verdict
+        if: always()
+        run: |
+          echo "ntdll: ${{ steps.ntdll.outcome }}  wineserver: ${{ steps.wineserver.outcome }}  win32u: ${{ steps.win32u.outcome }}"
+          [ "${{ steps.ntdll.outcome }}" = success ] && [ "${{ steps.wineserver.outcome }}" = success ] \
+            && [ "${{ steps.win32u.outcome }}" = success ]

@@ -1,11 +1,18 @@
 #!/bin/bash
 set -e
+# MAD_SDK picks the iOS SDK: iphoneos (the app) or iphonesimulator (the
+# simulator test harness, .github/workflows/sim-seh.yml).
+MAD_SDK="${MAD_SDK:-iphoneos}"
+case "$MAD_SDK" in
+    iphonesimulator) MAD_MIN=-mios-simulator-version-min=17.0 ;;
+    *) MAD_MIN=-miphoneos-version-min=17.0 ;;
+esac
 
 BUILD_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$BUILD_DIR/../.." && pwd)"
 WINE_SRC="$REPO_ROOT/wine"
 WINE_BUILD="$WINE_SRC/build-macos"
-SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+SDK=$(xcrun --sdk "$MAD_SDK" --show-sdk-path)
 OBJ_DIR="$BUILD_DIR/obj"
 APP_LIB="$REPO_ROOT/app/Madeira/libntdll_unix.a"
 
@@ -20,8 +27,8 @@ compile_one() {
     local name=$2
     echo -n "  $name... "
 
-    if xcrun -sdk iphoneos clang \
-        -arch arm64 -isysroot "$SDK" -miphoneos-version-min=17.0 \
+    if xcrun -sdk "$MAD_SDK" clang \
+        -arch arm64 -isysroot "$SDK" $MAD_MIN \
         -O2 -fPIC -fvisibility=hidden -fno-stack-protector -fno-strict-aliasing \
         -Wno-implicit-function-declaration -Wno-int-conversion \
         -include "$WINE_BUILD/include/config.h" \
@@ -58,8 +65,8 @@ compile_unixlib() {
     local src=$1 name=$2 prefix=$3
     shift 3
     echo -n "  $name... "
-    if xcrun -sdk iphoneos clang \
-        -arch arm64 -isysroot "$SDK" -miphoneos-version-min=17.0 \
+    if xcrun -sdk "$MAD_SDK" clang \
+        -arch arm64 -isysroot "$SDK" $MAD_MIN \
         -O2 -fPIC -fvisibility=hidden -fno-stack-protector -fno-strict-aliasing \
         -Wno-implicit-function-declaration -Wno-int-conversion \
         -include "$WINE_BUILD/include/config.h" \
@@ -151,8 +158,8 @@ compile_unixlib "$BUILD_DIR/winegstreamer_unixlib_ios.c" "winegstreamer_unixlib"
 # VideoToolbox, CoreMedia, CoreVideo, AudioToolbox and CoreFoundation
 # (app/Madeira.xcodeproj, Frameworks phase) next to the FFmpeg archives.
 echo -n "  wg_parser_apple_ios... "
-if xcrun -sdk iphoneos clang \
-    -arch arm64 -isysroot "$SDK" -miphoneos-version-min=17.0 \
+if xcrun -sdk "$MAD_SDK" clang \
+    -arch arm64 -isysroot "$SDK" $MAD_MIN \
     -O2 -fPIC -fvisibility=hidden -fno-stack-protector -fno-strict-aliasing -Wall -Werror=implicit-function-declaration \
     -c "$BUILD_DIR/wg_parser_apple_ios.c" -o "$OBJ_DIR/wg_parser_apple_ios.o" 2>"$OBJ_DIR/wg_parser_apple_ios.err"; then
     echo "OK"

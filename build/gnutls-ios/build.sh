@@ -15,6 +15,13 @@
 #  - Stage markers make re-runs skip completed stages; delete
 #    obj/<stage>.done to force a rebuild.
 set -e
+# MAD_SDK picks the iOS SDK: iphoneos (the app) or iphonesimulator (the
+# simulator test harness, .github/workflows/sim-seh.yml).
+MAD_SDK="${MAD_SDK:-iphoneos}"
+case "$MAD_SDK" in
+    iphonesimulator) MAD_MIN=-mios-simulator-version-min=17.0 ;;
+    *) MAD_MIN=-miphoneos-version-min=17.0 ;;
+esac
 
 BUILD_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$BUILD_DIR/../.." && pwd)"
@@ -26,16 +33,16 @@ GMP_VER=6.3.0
 NETTLE_VER=3.10.1
 GNUTLS_VER=3.8.9
 
-SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+SDK=$(xcrun --sdk "$MAD_SDK" --show-sdk-path)
 CLANG=$(xcrun -f clang)
-HOSTFLAGS="-arch arm64 -isysroot $SDK -miphoneos-version-min=17.0"
+HOSTFLAGS="-arch arm64 -isysroot $SDK $MAD_MIN"
 
 export CC="$CLANG $HOSTFLAGS"
 export CXX="$(xcrun -f clang++) $HOSTFLAGS"
 export CFLAGS="-O2"
-export AR=$(xcrun -sdk iphoneos -f ar)
-export RANLIB=$(xcrun -sdk iphoneos -f ranlib)
-export STRIP=$(xcrun -sdk iphoneos -f strip)
+export AR=$(xcrun -sdk "$MAD_SDK" -f ar)
+export RANLIB=$(xcrun -sdk "$MAD_SDK" -f ranlib)
+export STRIP=$(xcrun -sdk "$MAD_SDK" -f strip)
 export CC_FOR_BUILD="$CLANG -isysroot $(xcrun --sdk macosx --show-sdk-path)"
 export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig"
 # Configure probes must not find Homebrew libs meant for macOS.
