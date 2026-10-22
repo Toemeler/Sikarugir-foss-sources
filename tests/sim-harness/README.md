@@ -75,11 +75,13 @@ module+offset), the `[exec-req]` protection requests, and host faults with their
 pc resolved to a function in `xtajit64.dll`/`ntdll.dll`. The job's
 `harness-logs-<name>` artifact has the full logs and those two DLLs.
 
-To change the emulator or Wine as well, put patches in `fex-patches/` (applied to
-FEX after `build/fex-arm64ec/patches`; the fex-ec job rebuilds xtajit64.dll, with
-ccache) or `wine-patches/` (applied after `build/wine-pe/patches`; the pe-ntdll
-job builds ntdll.dll). Without any, the release's xtajit64.dll and the checked-in
-ntdll.dll are used. Changes to the unix sides (`build/ntdll-unix` and friends)
+To change the emulator as well, put patches in `fex-patches/` (applied to FEX
+after `build/fex-arm64ec/patches`; the fex-ec job rebuilds xtajit64.dll, with
+ccache). For Wine's PE ntdll, `ntdll_builds` in plan.json names builds, e.g.
+`"p3": {"patches": ["0001", "0002", "0003"]}` (the `build/wine-pe/patches` to keep;
+no `patches` = all), each built by a pe-ntdll job with `wine-patches/` on top; a
+variant picks one with `"ntdll": "p3"`. Otherwise the release's xtajit64.dll and
+the checked-in ntdll.dll are used. Changes to the unix sides (`build/ntdll-unix` and friends)
 rebuild the cached simulator libraries by themselves.
 
 `ersc-load-x64 inject` is how ersc_launcher.exe loads ersc.dll on a device: it

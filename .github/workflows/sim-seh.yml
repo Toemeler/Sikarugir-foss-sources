@@ -6,7 +6,7 @@
 # default to iphoneos, so the release build in build.yml is unchanged). The PE
 # side (ntdll.dll and the rest of arm64ec-windows, xtajit64.dll) is
 # SDK-independent and is exactly what the release ships, unless
-# tests/sim-harness/fex-patches or wine-patches hold patches (below).
+# fex-patches or plan.json "ntdll_builds" say otherwise (below).
 #
 # One push = one experiment, driven by tests/sim-harness/plan.json: every entry of
 # its "variants" is a job of its own (own simulator, in parallel) that runs the
@@ -19,8 +19,8 @@
 #             wineserver and win32u unix sides for the simulator SDK (cached).
 #   fex-ec    xtajit64.dll: the release's (its cache entry) or, with patches in
 #             tests/sim-harness/fex-patches, built with them on top (ccache).
-#   pe-ntdll  ntdll.dll built with tests/sim-harness/wine-patches on top of
-#             build/wine-pe/patches; only when there are any (else the checked-in one).
+#   pe-ntdll  one ntdll.dll per plan.json "ntdll_builds" entry: build/wine-pe/patches
+#             (all, or the subset it names) plus tests/sim-harness/wine-patches.
 #   harness   tests/sim-harness: links them into a headless runner, boots an
 #             iPad Pro (M4) simulator and runs one variant in it.
 
@@ -50,7 +50,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.p.outputs.matrix }}
-      wine_patches: ${{ steps.p.outputs.wine_patches }}
+      ntdll_matrix: ${{ steps.p.outputs.ntdll_matrix }}
+      has_ntdll: ${{ steps.p.outputs.has_ntdll }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -60,8 +61,9 @@ jobs:
           set -euo pipefail
           jq . tests/sim-harness/plan.json
           echo "matrix=$(jq -c '{include: .variants}' tests/sim-harness/plan.json)" >> "$GITHUB_OUTPUT"
-          if ls tests/sim-harness/wine-patches/*.patch >/dev/null 2>&1; then w=true; else w=false; fi
-          echo "wine_patches=$w" | tee -a "$GITHUB_OUTPUT"
+          n=$(jq -c '{include: [(.ntdll_builds // {}) | to_entries[] | {key: .key, patches: (.value.patches // null)}]}' tests/sim-harness/plan.json)
+          echo "ntdll_matrix=$n" | tee -a "$GITHUB_OUTPUT"
+          echo "has_ntdll=$(jq -r 'if (.ntdll_builds // {}) == {} then "false" else "true" end' tests/sim-harness/plan.json)" | tee -a "$GITHUB_OUTPUT"
 
   fex-sim:
     name: FEXCore (iphonesimulator)
@@ -327,11 +329,16 @@ jobs:
           retention-days: 3
 
   pe-ntdll:
-    name: ntdll.dll (PE)
+    name: ntdll.dll ${{ matrix.key }}
     needs: plan
-    if: needs.plan.outputs.wine_patches == 'true'
+    if: needs.plan.outputs.has_ntdll == 'true'
     runs-on: macos-26
     timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.ntdll_matrix) }}
+    env:
+      KEEP: ${{ toJSON(matrix.patches) }}
     steps:
       - uses: actions/checkout@v4
       - name: Cache key
@@ -340,8 +347,8 @@ jobs:
           set -euo pipefail
           k() { printf '%s\n' "$@" | shasum -a 256 | cut -c1-20; }
           t() { git rev-parse "HEAD:$1"; }
-          x=$(cat tests/sim-harness/wine-patches/*.patch | shasum -a 256 | cut -c1-20)
-          echo "key=ntdll-pe-sim-v1-$(k "$(t wine)" "$(t build/wine-pe)" "$MINGW" "$x")" | tee -a "$GITHUB_OUTPUT"
+          x=$(cat tests/sim-harness/wine-patches/*.patch 2>/dev/null | shasum -a 256 | cut -c1-20)
+          echo "key=ntdll-pe-sim-v2-$(k "$(t wine)" "$(t build/wine-pe)" "$MINGW" "$x" "$KEEP")" | tee -a "$GITHUB_OUTPUT"
       - name: "Cache: ntdll.dll"
         id: c
         uses: actions/cache/restore@v4
@@ -361,10 +368,17 @@ jobs:
           echo "$MINGW_SHA256  toolchains/$MINGW.tar.xz" | shasum -a 256 -c -
           tar -xJf "toolchains/$MINGW.tar.xz" -C toolchains
           git submodule update --init --depth 1 -- wine
-          # The extra patches go after build/wine-pe/patches, which build-ntdll.sh applies in name order.
+          # patches: the build/wine-pe/patches to keep (name prefixes; null = all). The extra
+          # patches go after them; build-ntdll.sh applies the directory in name order.
+          if [ "$KEEP" != null ]; then
+            for P in build/wine-pe/patches/*.patch; do
+              b=$(basename "$P"); jq -e --arg b "$b" 'any(.[]; . as $k | $b | startswith($k))' <<<"$KEEP" >/dev/null || rm "$P"
+            done
+          fi
           for P in tests/sim-harness/wine-patches/*.patch; do
-            cp "$P" "build/wine-pe/patches/9$(basename "$P")"
+            [ -e "$P" ] && cp "$P" "build/wine-pe/patches/9$(basename "$P")"
           done
+          ls build/wine-pe/patches/
           export PATH="$(brew --prefix)/opt/bison/bin:$(brew --prefix)/opt/flex/bin:$PATH"
           build/wine-pe/build-ntdll.sh
       - name: "Save: ntdll.dll"
@@ -375,7 +389,7 @@ jobs:
           path: app/Madeira/arm64ec-windows/ntdll.dll
       - uses: actions/upload-artifact@v4
         with:
-          name: ntdll
+          name: ntdll-${{ matrix.key }}
           path: app/Madeira/arm64ec-windows/ntdll.dll
           if-no-files-found: error
           retention-days: 3
@@ -383,7 +397,7 @@ jobs:
   harness:
     name: ${{ matrix.name }}
     needs: [plan, unix-sim, fex-ec, pe-ntdll]
-    if: ${{ !cancelled() && needs.unix-sim.result == 'success' && needs.fex-ec.result == 'success' && needs.pe-ntdll.result != 'failure' }}
+    if: ${{ !cancelled() && needs.unix-sim.result == 'success' && needs.fex-ec.result == 'success' }}
     runs-on: macos-26
     timeout-minutes: 45
     strategy:
@@ -420,10 +434,11 @@ jobs:
         with:
           name: xtajit64
           path: app/Madeira/arm64ec-windows
+      # "ntdll": a key of plan.json's ntdll_builds (built by pe-ntdll); else the checked-in one.
       - uses: actions/download-artifact@v4
-        if: needs.pe-ntdll.result == 'success'
+        if: matrix.ntdll
         with:
-          name: ntdll
+          name: ntdll-${{ matrix.ntdll }}
           path: app/Madeira/arm64ec-windows
       - name: Place the simulator libraries
         run: |

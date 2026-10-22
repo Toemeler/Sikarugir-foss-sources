@@ -1,5 +1,5 @@
 {
-  "comment": "One push = one experiment. Every variant is a CI job of its own: its own simulator, its 'run' lines (exe + args, run one after the other), 'env' (exported to the harness as SIMCTL_CHILD_*), 'cfg_preset' (a GameRecommendations.swift id: that game's madeira.cfg as a device applies it) and 'cfg' (lines after it), 'timeout' (seconds per run line, default 240), and 'ersc' (a key of ersc_builds, downloaded to system32/ersc.dll). See README.md. 'pe_release': a release tag whose Madeira.ipa supplies 'pe_files' (default ntdll.dll and xtajit64.dll) instead of this checkout's.",
+  "comment": "One push = one experiment. Every variant is a CI job of its own: its own simulator, its 'run' lines (exe + args, run one after the other), 'env' (exported to the harness as SIMCTL_CHILD_*), 'cfg_preset' (a GameRecommendations.swift id: that game's madeira.cfg as a device applies it) and 'cfg' (lines after it), 'timeout' (seconds per run line, default 240), and 'ersc' (a key of ersc_builds, downloaded to system32/ersc.dll). See README.md. 'pe_release': a release tag whose Madeira.ipa supplies 'pe_files' (default ntdll.dll and xtajit64.dll) instead of this checkout's. 'ntdll': a key of 'ntdll_builds', each an ntdll.dll built in CI from build/wine-pe/patches ('patches': the name prefixes to keep; absent = all) plus wine-patches/.",
   "ersc_builds": {
     "1.9.8": {
       "url": "https://github.com/Toemeler/ersc-testbin/releases/download/ersc-198/ersc.dll",
@@ -12,8 +12,8 @@
   },
   "variants": [
     {
-      "name": "b76-both-1.9.8",
-      "pe_release": "build-76",
+      "name": "ntdll-p2",
+      "ntdll": "p2",
       "ersc": "1.9.8",
       "cfg_preset": "elden-ring-ersc",
       "cfg": [
@@ -24,11 +24,8 @@
       ]
     },
     {
-      "name": "b76-fex-1.9.8",
-      "pe_release": "build-76",
-      "pe_files": [
-        "xtajit64.dll"
-      ],
+      "name": "ntdll-p3",
+      "ntdll": "p3",
       "ersc": "1.9.8",
       "cfg_preset": "elden-ring-ersc",
       "cfg": [
@@ -39,11 +36,8 @@
       ]
     },
     {
-      "name": "b76-ntdll-1.9.8",
-      "pe_release": "build-76",
-      "pe_files": [
-        "ntdll.dll"
-      ],
+      "name": "ntdll-p4",
+      "ntdll": "p4",
       "ersc": "1.9.8",
       "cfg_preset": "elden-ring-ersc",
       "cfg": [
@@ -54,15 +48,83 @@
       ]
     },
     {
-      "name": "head-steam-1.9.8",
+      "name": "ntdll-p5",
+      "ntdll": "p5",
       "ersc": "1.9.8",
       "cfg_preset": "elden-ring-ersc",
       "cfg": [
         "quiet-log = 0"
       ],
       "run": [
-        "ersc-load-x64.exe inject steam"
+        "ersc-load-x64.exe inject"
+      ]
+    },
+    {
+      "name": "ntdll-p6",
+      "ntdll": "p6",
+      "ersc": "1.9.8",
+      "cfg_preset": "elden-ring-ersc",
+      "cfg": [
+        "quiet-log = 0"
+      ],
+      "run": [
+        "ersc-load-x64.exe inject"
+      ]
+    },
+    {
+      "name": "ntdll-p7",
+      "ntdll": "p7",
+      "ersc": "1.9.8",
+      "cfg_preset": "elden-ring-ersc",
+      "cfg": [
+        "quiet-log = 0"
+      ],
+      "run": [
+        "ersc-load-x64.exe inject"
       ]
     }
-  ]
+  ],
+  "ntdll_builds": {
+    "p2": {
+      "patches": [
+        "0001",
+        "0002"
+      ]
+    },
+    "p3": {
+      "patches": [
+        "0001",
+        "0002",
+        "0003"
+      ]
+    },
+    "p4": {
+      "patches": [
+        "0001",
+        "0002",
+        "0003",
+        "0004"
+      ]
+    },
+    "p5": {
+      "patches": [
+        "0001",
+        "0002",
+        "0003",
+        "0004",
+        "0005"
+      ]
+    },
+    "p6": {
+      "patches": [
+        "0001",
+        "0002",
+        "0003",
+        "0004",
+        "0005",
+        "0006"
+      ]
+    },
+    "p7": {}
+  }
 }
