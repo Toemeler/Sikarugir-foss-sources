@@ -22,7 +22,7 @@ on:
     inputs:
       exes:
         description: "Guest exes to run, space separated"
-        default: "fib-x64.exe tfstep-x64.exe"
+        default: "fib-x64.exe tfstep-x64.exe sehctx-x64.exe"
 
 permissions:
   contents: read
@@ -227,7 +227,7 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 60
     env:
-      EXES: ${{ inputs.exes || 'fib-x64.exe tfstep-x64.exe' }}
+      EXES: ${{ inputs.exes || 'fib-x64.exe tfstep-x64.exe sehctx-x64.exe' }}
     steps:
       - uses: actions/checkout@v4
       - name: Toolchain
