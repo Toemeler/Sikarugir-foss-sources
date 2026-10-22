@@ -439,6 +439,21 @@ jobs:
           # "ersc-load-x64 inject" starts this copy as the game.
           cp app/Madeira/arm64ec-windows/ersc-load-x64.exe app/Madeira/arm64ec-windows/eldenring.exe
           shasum -a 256 app/Madeira/arm64ec-windows/ntdll.dll app/Madeira/arm64ec-windows/xtajit64.dll
+      # pe_release: ntdll.dll / xtajit64.dll (pe_files) as a release shipped them, from its Madeira.ipa.
+      - name: PE binaries from a release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          r=$(jq -r '.pe_release // empty' <<<"$VARIANT")
+          [ -n "$r" ] || { echo "PE binaries from this checkout"; exit 0; }
+          gh release download "$r" -R "$GITHUB_REPOSITORY" -p Madeira.ipa -D "$RUNNER_TEMP/ipa"
+          for f in $(jq -r '(.pe_files // ["ntdll.dll", "xtajit64.dll"])[]' <<<"$VARIANT"); do
+            m=$(unzip -Z1 "$RUNNER_TEMP/ipa/Madeira.ipa" | grep -E "^Payload/[^/]+\.app/arm64ec-windows/$f\$")
+            unzip -o -j "$RUNNER_TEMP/ipa/Madeira.ipa" "$m" -d app/Madeira/arm64ec-windows >/dev/null
+            echo "$f from $r: $(shasum -a 256 "app/Madeira/arm64ec-windows/$f" | cut -c1-16)"
+          done
+          strings -a app/Madeira/arm64ec-windows/xtajit64.dll | grep -m2 -E '20[0-9]{2}' | head -2 || true
       # Seamless Co-op's ersc.dll: a test input only, never committed here or bundled into a
       # release; fetched from its own repo (plan.json "ersc_builds") and checked against its hash.
       - name: ersc.dll

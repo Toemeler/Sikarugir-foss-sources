@@ -63,6 +63,9 @@ job of its own (its own simulator, all in parallel):
   game's config is written to the simulator's `Documents/madeira.cfg`, as the app
   applies it on a device (its `env.*` lines are exported, `local-write` etc. read).
   `cfg`: lines after it (later keys win), also usable alone.
+- `pe_release`: a release tag (e.g. `build-76`); its `Madeira.ipa` supplies
+  `pe_files` (default `ntdll.dll` and `xtajit64.dll`) instead of this checkout's,
+  to run the PE side a device actually had (the unix side stays this checkout's).
 - `ersc`: a key of `ersc_builds`; that ersc.dll is downloaded into the bundle
   (system32) and checked against its sha256. It is never committed here.
 
