@@ -22,7 +22,7 @@ on:
     inputs:
       exes:
         description: "Guest exes to run, space separated"
-        default: "fib-x64.exe tfstep-x64.exe sehctx-x64.exe"
+        default: "fib-x64.exe tfstep-x64.exe sehctx-x64.exe ersc-load-x64.exe"
 
 permissions:
   contents: read
@@ -227,7 +227,7 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 60
     env:
-      EXES: ${{ inputs.exes || 'fib-x64.exe tfstep-x64.exe sehctx-x64.exe' }}
+      EXES: ${{ inputs.exes || 'fib-x64.exe tfstep-x64.exe sehctx-x64.exe ersc-load-x64.exe' }}
     steps:
       - uses: actions/checkout@v4
       - name: Toolchain
@@ -286,9 +286,20 @@ jobs:
       - name: Guest test exes
         run: |
           set -euo pipefail
-          for n in fib-x64 tfstep-x64 sehctx-x64; do tests/x64/build.sh "$n" | tail -3; done
+          for n in fib-x64 tfstep-x64 sehctx-x64 ersc-load-x64; do tests/x64/build.sh "$n" | tail -3; done
+          "toolchains/$MINGW/bin/x86_64-w64-mingw32-clang" -O2 -shared \
+            -o app/Madeira/arm64ec-windows/steam_api64.dll tests/x64/steam_api64-stub.c
           ls -l app/Madeira/arm64ec-windows/*.exe | head -20
           shasum -a 256 app/Madeira/arm64ec-windows/ntdll.dll app/Madeira/arm64ec-windows/xtajit64.dll
+      # Seamless Co-op's ersc.dll for ersc-load-x64: a test input only, never committed here
+      # or bundled into a release; fetched from its own repo and checked against this hash.
+      - name: ersc.dll
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 -o app/Madeira/arm64ec-windows/ersc.dll \
+            https://github.com/Toemeler/ersc-testbin/releases/download/ersc-1/ersc.dll
+          echo "fcd11a1849fd37851bb449be30f1525cf498f63fd1fa568c4e15030ebe7cb251  app/Madeira/arm64ec-windows/ersc.dll" \
+            | shasum -a 256 -c -
 
       - name: Build the harness
         run: tests/sim-harness/build.sh
@@ -303,7 +314,7 @@ jobs:
           for e in $EXES; do
             r=0; SIM_TIMEOUT=240 tests/sim-harness/run.sh "$e" || r=$?
             echo "--- $e: exit $r; harness lines and guest output ---"
-            grep -E '^\[sim-harness\]|\[sim-stub\]|\[sim-txm\]|MADEIRA-|tfstep-x64|sehctx|fib|\[guest-seh\]|err:' \
+            grep -E '^\[sim-harness\]|\[sim-stub\]|\[sim-txm\]|MADEIRA-|tfstep-x64|sehctx|ersc-load|fib|\[guest-seh\]|err:' \
               "tests/sim-harness/out/logs/$e.log" | head -300 || true
             for g in tests/sim-harness/out/logs/guest-*.log; do [ -f "$g" ] && { echo "--- $g ---"; cat "$g"; }; done
             [ $r = 0 ] || RC=1
