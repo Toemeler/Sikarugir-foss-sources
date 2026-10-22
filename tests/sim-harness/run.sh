@@ -21,6 +21,7 @@ echo "=== $EXE $* (simulator $UDID, timeout ${T}s) ==="
 export SIMCTL_CHILD_SIM_TIMEOUT="$T"
 [ -n "${SIM_JIT_POOL_MB:-}" ] && export SIMCTL_CHILD_SIM_JIT_POOL_MB="$SIM_JIT_POOL_MB"
 [ -n "${MADEIRA_DEBUG_VERBOSE:-}" ] && export SIMCTL_CHILD_MADEIRA_DEBUG_VERBOSE="$MADEIRA_DEBUG_VERBOSE"
+[ -n "${SIM_TXM:-}" ] && export SIMCTL_CHILD_SIM_TXM="$SIM_TXM"
 
 xcrun simctl spawn "$UDID" "$APP/madeira-sim" "$EXE" "$@" > "$LOG" 2>&1 &
 PID=$!
