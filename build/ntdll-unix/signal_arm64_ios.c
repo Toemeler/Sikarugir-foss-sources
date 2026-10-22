@@ -8113,35 +8113,8 @@ static int ios_mach_deliver_guest_exception_inner( thread_t thread, arm_thread_s
     {
         static int host_decline_n;   /* sim-seh: which host-pc faults go to the signal path */
 
-        /* sim-seh: a syscall's unix side storing its result into a guest page that FEX keeps
-         * write-trapped for self-modifying-code detection (MADEIRA_SMC_HOST_PAGE: Themida's
-         * EXECUTE|WRITE sections). Seamless Co-op's ersc.dll passes NtOpenThreadToken a handle
-         * pointer inside its own image; the unix NtOpenThreadToken's `*handle = 0` faulted, was
-         * declined here, and came back to the guest as an EXEC fault at a host pc with the
-         * syscall frame as its address -- the guest's VEH then wrecked the thread. On Windows the
-         * kernel's store simply lands. Deliver it as the write fault it is, now: FEX's
-         * ResetToConsistentState untraps the host page (HandleRWXAccessViolation) and
-         * NtContinueNative resumes the store; a genuinely read-only target still reaches the
-         * guest as an access violation. Only for code of the image holding this handler (the unix
-         * side), never for system dylibs. */
-        {
-            Dl_info hdi, self_di;
-            if (!is_align && rec.ExceptionCode == EXCEPTION_ACCESS_VIOLATION &&
-                rec.ExceptionInformation[0] == EXCEPTION_WRITE_FAULT && fault_addr >= 0x100000000ULL &&
-                dladdr( (const void *)(uintptr_t)pc, &hdi ) &&
-                dladdr( (const void *)ios_mach_deliver_guest_exception, &self_di ) && hdi.dli_fbase == self_di.dli_fbase)
-            {
-                static int host_write_n;
-                if (host_write_n < 16)
-                {
-                    host_write_n++;
-                    dprintf( 2, "[mach-deliver] sim-seh unix-side write #%d pc=0x%llx (%s) addr=0x%llx -> guest write fault\n",
-                             host_write_n, (unsigned long long)pc, hdi.dli_sname ? hdi.dli_sname : "?",
-                             (unsigned long long)fault_addr );
-                }
-                goto dispatch;
-            }
-        }
+        /* sim-seh: a unix-side store into a write-trapped guest page is emulated on the
+         * faulting thread by segv_handler (ios_unix_store_into_guest); decline it here. */
         if (host_decline_n < 16)
         {
             host_decline_n++;
@@ -8846,6 +8819,80 @@ static inline void ios_track_signal( int sig, ucontext_t *context )
         ios_signal_in_pe++;
 }
 
+#endif
+
+
+#ifdef WINE_IOS
+static int ios_emulate_store(ucontext_t *ctx, uint32_t insn, uintptr_t rw_addr);
+
+/***********************************************************************
+ *           ios_unix_store_into_guest   (sim-seh)
+ *
+ * A syscall's unix side storing its result into a guest page the host maps read-only
+ * because FEX keeps it write-trapped for self-modifying code (MADEIRA_SMC_HOST_PAGE;
+ * Themida's EXECUTE|WRITE sections). Seamless Co-op's ersc.dll hands NtOpenThreadToken a
+ * handle pointer inside its own image, and the unix `*handle = 0` faulted. That fault
+ * cannot become a guest exception: the thread is inside the syscall, on the stack just below
+ * its syscall frame, and the first syscall the exception path makes (FEX's untrap is an
+ * NtProtectVirtualMemory) reuses that stack and overwrote the delivered record and context
+ * (the guest saw an EXEC fault at a host pc, FEX read Pc=0x7c). On Windows the kernel's
+ * store lands. So land it: make the host page writable for the one store, emulate the
+ * instruction, restore the protection and step past it. FEX's trap stays armed; a store of
+ * a few result bytes is not code. Plain STR/STRB/STRH/STP with an immediate offset and no
+ * writeback only; anything else takes the old path.
+ */
+static int ios_unix_store_into_guest( siginfo_t *siginfo, ucontext_t *context, DWORD64 esr )
+{
+    static int n;
+    uintptr_t pc = PC_sig(context), addr = (uintptr_t)siginfo->si_addr, page, end, ea;
+    mach_vm_address_t ra;
+    mach_vm_size_t rs;
+    vm_region_basic_info_data_64_t info;
+    mach_msg_type_number_t cnt = VM_REGION_BASIC_INFO_COUNT_64;
+    mach_port_t obj = MACH_PORT_NULL;
+    Dl_info a, b;
+    uint32_t insn;
+    int ok;
+
+    if (((esr >> 26) & 0x3f) != 0x25 || !(esr & 0x40)) return 0;    /* data abort, EL0, write */
+    if (addr < 0x100000000ULL) return 0;
+    if (!dladdr( (void *)pc, &a ) || !dladdr( (void *)ios_unix_store_into_guest, &b ) ||
+        a.dli_fbase != b.dli_fbase) return 0;                         /* the unix side's own code */
+    if (!is_inside_syscall( SP_sig(context) )) return 0;
+    insn = *(const uint32_t *)pc;
+    {
+        int rn = (insn >> 5) & 31;
+        uintptr_t base = rn == 31 ? (uintptr_t)SP_sig(context) : (uintptr_t)REGn_sig(rn, context);
+        if ((insn & 0x3FC00000) == 0x39000000)                       /* STR* unsigned offset */
+            ea = base + (((insn >> 10) & 0xfff) << ((insn >> 30) & 3));
+        else if ((insn & 0x7FC00000) == 0x29000000)                  /* STP signed offset */
+            ea = base + (uintptr_t)((intptr_t)((int32_t)(insn << 10) >> 25) * ((insn >> 31) ? 8 : 4));
+        else return 0;
+    }
+    if (addr < ea || addr >= ea + 16) return 0;                     /* not this instruction's store */
+
+    page = ea & ~(uintptr_t)0x3fff;
+    end = (ea + 16 + 0x3fff) & ~(uintptr_t)0x3fff;
+    ra = page;
+    if (mach_vm_region( mach_task_self(), &ra, &rs, VM_REGION_BASIC_INFO_64,
+                        (vm_region_info_t)&info, &cnt, &obj ) != KERN_SUCCESS) return 0;
+    if (ra > page || (info.protection & VM_PROT_WRITE) || !(info.protection & VM_PROT_READ) ||
+        !(info.max_protection & VM_PROT_WRITE)) return 0;
+    if (mach_vm_protect( mach_task_self(), page, end - page, FALSE, VM_PROT_READ | VM_PROT_WRITE ) != KERN_SUCCESS)
+        return 0;
+    ok = ios_emulate_store( context, insn, ea );
+    mach_vm_protect( mach_task_self(), page, end - page, FALSE, info.protection );
+    if (!ok) return 0;
+    PC_sig(context) += 4;
+    if (n < 16)
+    {
+        n++;
+        dprintf( 2, "[unix-store] sim-seh #%d %s+0x%lx stored to write-trapped guest page 0x%lx (prot %x) insn %08x\n",
+                 n, a.dli_sname ? a.dli_sname : "?", (unsigned long)(pc - (uintptr_t)a.dli_saddr),
+                 (unsigned long)addr, info.protection, insn );
+    }
+    return 1;
+}
 #endif
 
 
@@ -9558,6 +9605,8 @@ static void segv_handler( int signal, siginfo_t *siginfo, void *sigcontext )
     DWORD64 esr = get_fault_esr( context );
 #ifdef WINE_IOS
     int dbg_ok;
+
+    if (ios_unix_store_into_guest( siginfo, context, esr )) return;   /* sim-seh */
 
     /* ml481 (#85): decide FOREIGN-ness before anything that could allocate —
      * ios_make_wine_logging_safe() itself is the call that deadlocked in ml480. */
