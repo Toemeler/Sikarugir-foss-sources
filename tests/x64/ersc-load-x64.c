@@ -6,7 +6,8 @@
  * into it until the stack overflows. Wine patch 0002 logs the handler's return value
  * and context as [guest-seh] lines; this exe only gets ersc.dll that far:
  *
- *   1. LoadLibraryA(argv[1], default "ersc.dll"): DllMain and its TLS callbacks run;
+ *   1. load ersc.dll's imports, then LoadLibraryA(argv[1], default "ersc.dll"): DllMain
+ *      and its TLS callbacks run;
  *   2. GetProcAddress("modengine_ext_init") and call it as Mod Engine 2 does, with a
  *      connector whose vtable entries log and return 0, and an out pointer for the
  *      extension it creates (argv[2] = "noinit" skips this step);
@@ -72,6 +73,16 @@ int main(int argc, char **argv)
     const char *dll = argc > 1 ? argv[1] : "ersc.dll";
     int do_init = !(argc > 2 && !strcmp(argv[2], "noinit"));
     memcpy(g_vtbl, c_stubs, sizeof(g_vtbl));
+
+    /* ersc.dll imports WS2_32.dll, ADVAPI32.dll, CRYPT32.dll ... in upper case; the
+     * prefix's lookup of those file names is case-sensitive, so load them first by the
+     * bundle's names, as the game has them loaded before Mod Engine 2 loads ersc.dll. */
+    static const char *const deps[] = {"user32.dll", "ws2_32.dll", "advapi32.dll", "crypt32.dll",
+                                       "wldap32.dll", "normaliz.dll", "steam_api64.dll"};
+    for (unsigned i = 0; i < sizeof(deps) / sizeof(deps[0]); i++) {
+        HMODULE d = LoadLibraryA(deps[i]);
+        say("[ersc-load] preload %s: %p (error %lu)", deps[i], (void *)d, d ? 0 : GetLastError());
+    }
 
     say("[ersc-load] pid %lu, LoadLibraryA(\"%s\") ...", GetCurrentProcessId(), dll);
     HMODULE h = LoadLibraryA(dll);
