@@ -31,6 +31,8 @@
 
 extern unsigned long madeira_early_window_base, madeira_early_window_size;
 extern unsigned long madeira_early_pool_base, madeira_early_pool_size;
+extern uintptr_t sim_txm_pool_lo, sim_txm_pool_hi;   /* txm_shim.c */
+extern unsigned long sim_txm_dropped(void);
 
 static int g_out = -1;   /* the real stdout; the launcher points fd 1 and 2 at the log */
 
@@ -96,6 +98,9 @@ static int make_pool(size_t want)
     if ((kr = vm_protect(task, rw, size, FALSE, VM_PROT_READ | VM_PROT_WRITE)) != KERN_SUCCESS) {
         say("FAIL: vm_protect(RW alias) kr=%d", kr); return -1;
     }
+    /* The pool is the one range txm_shim.c lets execute, as TXM does on a device. */
+    sim_txm_pool_lo = rx;
+    sim_txm_pool_hi = rx + size;
     if ((kr = vm_protect(task, rx, size, FALSE, VM_PROT_READ | VM_PROT_EXECUTE)) != KERN_SUCCESS) {
         say("FAIL: vm_protect(RX) kr=%d", kr); return -1;
     }
@@ -216,6 +221,7 @@ int main(int argc, char *argv[])
 
         uint32_t st = 0;
         int crashed = wine_crash_exit_status(&st);
+        say("execute requests refused outside the pool (TXM emulation): %lu", sim_txm_dropped());
         if (timed_out) say("RESULT: TIMEOUT after %.0fs (guest still running)", timeout);
         else if (crashed) say("RESULT: guest ended with status 0x%08x", st);
         else say("RESULT: guest exited");

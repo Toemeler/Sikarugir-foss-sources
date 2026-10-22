@@ -301,9 +301,9 @@ jobs:
         run: |
           RC=0
           for e in $EXES; do
-            SIM_TIMEOUT=240 tests/sim-harness/run.sh "$e"; r=$?
+            r=0; SIM_TIMEOUT=240 tests/sim-harness/run.sh "$e" || r=$?
             echo "--- $e: exit $r; harness lines and guest output ---"
-            grep -E '^\[sim-harness\]|\[sim-stub\]|MADEIRA-|tfstep-x64|sehctx|fib|\[guest-seh\]|err:' \
+            grep -E '^\[sim-harness\]|\[sim-stub\]|\[sim-txm\]|MADEIRA-|tfstep-x64|sehctx|fib|\[guest-seh\]|err:' \
               "tests/sim-harness/out/logs/$e.log" | head -300 || true
             for g in tests/sim-harness/out/logs/guest-*.log; do [ -f "$g" ] && { echo "--- $g ---"; cat "$g"; }; done
             [ $r = 0 ] || RC=1

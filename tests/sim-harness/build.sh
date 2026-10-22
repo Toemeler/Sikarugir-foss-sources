@@ -34,6 +34,7 @@ OBJCFLAGS=(-fobjc-arc -fmodules)
 SOURCES=(
     "$H/harness_main.m"
     "$H/harness_glue.c"
+    "$H/txm_shim.c"
     "$A/WineServerBridge.m"
     "$A/WineProcessBridge.m"
     "$A/JITAllocator.c"

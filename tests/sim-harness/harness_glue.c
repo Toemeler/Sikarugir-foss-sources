@@ -10,5 +10,5 @@
 int64_t fex_get_jit_write_offset(void)
 {
     const char *v = getenv("MADEIRA_JIT_WRITE_OFFSET");
-    return v ? (int64_t)strtoll(v, NULL, 0) : 0;
+    return v ? (int64_t)strtoull(v, NULL, 0) : 0;   /* the launcher prints it as 0x%llx */
 }
