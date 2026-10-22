@@ -347,7 +347,7 @@ jobs:
           set -euo pipefail
           k() { printf '%s\n' "$@" | shasum -a 256 | cut -c1-20; }
           t() { git rev-parse "HEAD:$1"; }
-          x=$(cat tests/sim-harness/wine-patches/*.patch 2>/dev/null | shasum -a 256 | cut -c1-20)
+          x=$( (cat tests/sim-harness/wine-patches/*.patch 2>/dev/null || true) | shasum -a 256 | cut -c1-20)
           echo "key=ntdll-pe-sim-v2-$(k "$(t wine)" "$(t build/wine-pe)" "$MINGW" "$x" "$KEEP")" | tee -a "$GITHUB_OUTPUT"
       - name: "Cache: ntdll.dll"
         id: c
