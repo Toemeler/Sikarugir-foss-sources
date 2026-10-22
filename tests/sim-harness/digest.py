@@ -157,6 +157,7 @@ def digest(log):
     # Guest/host addresses that were executed but belong to no PE module (AV EXEC, [veh] Rip).
     seen = set()
     for l in text:
+        if 'AV WRITE' in l or 'AV READ' in l: continue
         for m in re.finditer(r'(?:AV EXEC of |Address: |Rip=)([0-9A-Fa-f]{9,16})', l):
             a = int(m.group(1), 16)
             if a in seen or len(seen) >= 16: continue

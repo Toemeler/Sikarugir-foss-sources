@@ -505,6 +505,13 @@ jobs:
             [ $r = 0 ] || RC=1
           done < <(jq -r '.run[]' <<<"$VARIANT")
           exit $RC
+      - name: Host symbols
+        if: always()
+        run: |
+          B=tests/sim-harness/out/MadeiraSim.app/madeira-sim
+          [ -f "$B" ] || exit 0
+          nm -n "$B" > tests/sim-harness/out/logs/madeira-sim.nm || true
+          otool -l "$B" | grep -A9 -E 'LC_SEGMENT_64' > tests/sim-harness/out/logs/madeira-sim.segments || true
       - name: Digest
         if: always()
         run: python3 tests/sim-harness/digest.py tests/sim-harness/out/logs app/Madeira/arm64ec-windows "toolchains/$MINGW/bin"
@@ -520,6 +527,7 @@ jobs:
             tests/sim-harness/out/obj/*.err
             app/Madeira/arm64ec-windows/xtajit64.dll
             app/Madeira/arm64ec-windows/ntdll.dll
+            tests/sim-harness/out/MadeiraSim.app/madeira-sim
           if-no-files-found: ignore
           retention-days: 7
       - name: Fail if the run failed

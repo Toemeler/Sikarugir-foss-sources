@@ -22,45 +22,6 @@
       ],
       "name": "ntdll-p2",
       "ntdll": "p2"
-    },
-    {
-      "ersc": "1.9.8",
-      "cfg_preset": "elden-ring-ersc",
-      "cfg": [
-        "quiet-log = 0"
-      ],
-      "run": [
-        "ersc-load-x64.exe inject"
-      ],
-      "name": "b76",
-      "pe_release": "build-76"
-    },
-    {
-      "ersc": "1.9.8",
-      "cfg_preset": "elden-ring-ersc",
-      "cfg": [
-        "quiet-log = 0"
-      ],
-      "run": [
-        "ersc-load-x64.exe self"
-      ],
-      "name": "ntdll-p2-self",
-      "ntdll": "p2"
-    },
-    {
-      "ersc": "1.9.8",
-      "cfg_preset": "elden-ring-ersc",
-      "cfg": [
-        "quiet-log = 0"
-      ],
-      "run": [
-        "ersc-load-x64.exe inject"
-      ],
-      "name": "ntdll-p7-rtcs",
-      "ntdll": "p7",
-      "env": {
-        "MADEIRA_RTCS_LOG": "all"
-      }
     }
   ],
   "ntdll_builds": {
@@ -68,40 +29,6 @@
       "patches": [
         "0001",
         "0002"
-      ]
-    },
-    "p3": {
-      "patches": [
-        "0001",
-        "0002",
-        "0003"
-      ]
-    },
-    "p4": {
-      "patches": [
-        "0001",
-        "0002",
-        "0003",
-        "0004"
-      ]
-    },
-    "p5": {
-      "patches": [
-        "0001",
-        "0002",
-        "0003",
-        "0004",
-        "0005"
-      ]
-    },
-    "p6": {
-      "patches": [
-        "0001",
-        "0002",
-        "0003",
-        "0004",
-        "0005",
-        "0006"
       ]
     },
     "p7": {}
