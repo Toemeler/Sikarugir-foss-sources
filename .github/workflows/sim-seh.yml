@@ -313,7 +313,13 @@ jobs:
         if: always()
         run: |
           L=tests/sim-harness/out/logs
-          grep -h 'cases match x86 hardware' $L/*.log | sort -u || echo "tfstep summary line not found"
+          {
+            echo "### Simulator run ($EXES)"
+            echo '```'
+            grep -h -E '^\[sim-harness\] (RESULT|JIT pool|execute requests)' $L/*.exe.log 2>/dev/null || true
+            grep -h -E 'cases match x86 hardware|\] DIFF:|^  (context|no hardware)' $L/guest-*.log 2>/dev/null || true
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
