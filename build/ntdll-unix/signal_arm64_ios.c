@@ -10703,8 +10703,7 @@ static void segv_handler( int signal, siginfo_t *siginfo, void *sigcontext )
             hp >= 0x100000000ULL && hp < 0x7000000000ULL && host_fault_n < 16)
         {
             host_fault_n++;
-            ERR( "[host-fault] #%d pc=%p lr=%p addr=%p esr=%llx info0=%lu sp=%p inside_syscall=%d frame=%p
-",
+            ERR( "[host-fault] #%d pc=%p lr=%p addr=%p esr=%llx info0=%lu sp=%p inside_syscall=%d frame=%p\n",
                  host_fault_n, (void *)hp, (void *)LR_sig(context), siginfo->si_addr, (unsigned long long)esr,
                  (unsigned long)rec.ExceptionInformation[0], (void *)SP_sig(context),
                  is_inside_syscall( SP_sig(context) ), get_syscall_frame() );
