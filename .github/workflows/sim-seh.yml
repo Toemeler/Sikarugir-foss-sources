@@ -291,14 +291,14 @@ jobs:
             -o app/Madeira/arm64ec-windows/steam_api64.dll tests/x64/steam_api64-stub.c
           ls -l app/Madeira/arm64ec-windows/*.exe | head -20
           shasum -a 256 app/Madeira/arm64ec-windows/ntdll.dll app/Madeira/arm64ec-windows/xtajit64.dll
-      # Seamless Co-op's ersc.dll for ersc-load-x64: a test input only, never committed here
+      # Seamless Co-op v1.9.8 ersc.dll for ersc-load-x64 (the iPad runs v1.9.9, same layout): a test input only, never committed here
       # or bundled into a release; fetched from its own repo and checked against this hash.
       - name: ersc.dll
         run: |
           set -euo pipefail
           curl -fsSL --retry 3 -o app/Madeira/arm64ec-windows/ersc.dll \
-            https://github.com/Toemeler/ersc-testbin/releases/download/ersc-1/ersc.dll
-          echo "fcd11a1849fd37851bb449be30f1525cf498f63fd1fa568c4e15030ebe7cb251  app/Madeira/arm64ec-windows/ersc.dll" \
+            https://github.com/Toemeler/ersc-testbin/releases/download/ersc-198/ersc.dll
+          echo "28d1e82b6e06a37f47689ab9147e48aae4c8be1adb4a8cf369e89be53fddc2bc  app/Madeira/arm64ec-windows/ersc.dll" \
             | shasum -a 256 -c -
 
       - name: Build the harness
