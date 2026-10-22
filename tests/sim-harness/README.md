@@ -44,3 +44,37 @@ the "Build the harness" step and add its name to `EXES`.
   which is not staged yet.
 
 A result that matters should still get one confirming run on a real iPad.
+
+## Experiments: plan.json
+
+Each push runs `tests/sim-harness/plan.json`. Every entry of its `variants` is a
+job of its own (its own simulator, all in parallel):
+
+```json
+{"name": "inject-1.9.8", "ersc": "1.9.8", "run": ["ersc-load-x64.exe inject"],
+ "env": {"MADEIRA_DEBUG_VERBOSE": "1"}, "timeout": 240}
+```
+
+- `run`: guest command lines (exe in `arm64ec-windows`, then its arguments), run
+  one after the other; `timeout`: seconds per line (default 240).
+- `env`: exported to the harness process (`SIMCTL_CHILD_*`), so Madeira's own
+  `MADEIRA_*`/`FEX_*` switches work.
+- `ersc`: a key of `ersc_builds`; that ersc.dll is downloaded into the bundle
+  (system32) and checked against its sha256. It is never committed here.
+
+The `Digest` step of each job (`digest.py`) prints what matters: the result, the
+guest's log, the `[guest-seh]` lines, an exception census (each SINGLE_STEP as
+module+offset), the `[exec-req]` protection requests, and host faults with their
+pc resolved to a function in `xtajit64.dll`/`ntdll.dll`. The job's
+`harness-logs-<name>` artifact has the full logs and those two DLLs.
+
+To change the emulator or Wine as well, put patches in `fex-patches/` (applied to
+FEX after `build/fex-arm64ec/patches`; the fex-ec job rebuilds xtajit64.dll, with
+ccache) or `wine-patches/` (applied after `build/wine-pe/patches`; the pe-ntdll
+job builds ntdll.dll). Without any, the release's xtajit64.dll and the checked-in
+ntdll.dll are used. Changes to the unix sides (`build/ntdll-unix` and friends)
+rebuild the cached simulator libraries by themselves.
+
+`ersc-load-x64 inject` is how ersc_launcher.exe loads ersc.dll on a device: it
+starts `eldenring.exe` (a copy of the loader) suspended and loads ersc.dll into
+it with a remote thread at LoadLibraryA.

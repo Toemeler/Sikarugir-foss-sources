@@ -1,0 +1,19 @@
+{
+  "comment": "One push = one experiment. Every variant is a CI job of its own: its own simulator, its 'run' lines (exe + args, run one after the other), its 'env' (exported to the harness as SIMCTL_CHILD_*), 'timeout' (seconds per run line, default 240), and 'ersc' (a key of ersc_builds, downloaded to system32/ersc.dll). See README.md.",
+  "ersc_builds": {
+    "1.9.8": {
+      "url": "https://github.com/Toemeler/ersc-testbin/releases/download/ersc-198/ersc.dll",
+      "sha256": "28d1e82b6e06a37f47689ab9147e48aae4c8be1adb4a8cf369e89be53fddc2bc"
+    },
+    "2.0.1": {
+      "url": "https://github.com/Toemeler/ersc-testbin/releases/download/ersc-1/ersc.dll",
+      "sha256": "fcd11a1849fd37851bb449be30f1525cf498f63fd1fa568c4e15030ebe7cb251"
+    }
+  },
+  "variants": [
+    {"name": "self-1.9.8", "ersc": "1.9.8", "run": ["ersc-load-x64.exe self"]},
+    {"name": "inject-1.9.8", "ersc": "1.9.8", "run": ["ersc-load-x64.exe inject"]},
+    {"name": "inject-steam-1.9.8", "ersc": "1.9.8", "run": ["ersc-load-x64.exe inject steam"]},
+    {"name": "inject-2.0.1", "ersc": "2.0.1", "run": ["ersc-load-x64.exe inject"]}
+  ]
+}

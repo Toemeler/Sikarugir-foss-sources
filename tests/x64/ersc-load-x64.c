@@ -1,21 +1,32 @@
-/* ersc-load-x64.c — load Seamless Co-op's ersc.dll the way Mod Engine 2 does, without the game.
+/* ersc-load-x64.c — load Seamless Co-op's ersc.dll without the game.
  *
- * ersc.dll (Themida) sets EFLAGS.TF while it initializes and takes a SINGLE_STEP at
- * ersc.dll+0x30c390 that its frame handler (ersc.dll+0x31eed6) should accept. Under
- * Madeira the handler returns 0xffffffff and ntdll raises STATUS_INVALID_DISPOSITION
- * into it until the stack overflows. Wine patch 0002 logs the handler's return value
- * and context as [guest-seh] lines; this exe only gets ersc.dll that far:
+ * ersc.dll (Themida) sets EFLAGS.TF while it initializes and takes a SINGLE_STEP
+ * (v1.9.9 on the iPad: at ersc.dll+0x30c390) that its frame handler (+0x31eed6) should
+ * accept. Under Madeira the handler returns 0xffffffff and ntdll raises
+ * STATUS_INVALID_DISPOSITION into it until the stack overflows. Wine patch 0002 logs
+ * the handler's return value and context as [guest-seh] lines; this exe only gets
+ * ersc.dll that far. ersc.dll is expected next to the exe (system32 in the harness).
  *
- *   1. load ersc.dll's imports, then LoadLibraryA(argv[1], default "ersc.dll"): DllMain
- *      and its TLS callbacks run;
- *   2. GetProcAddress("modengine_ext_init") and call it as Mod Engine 2 does, with a
- *      connector whose vtable entries log and return 0, and an out pointer for the
- *      extension it creates (argv[2] = "noinit" skips this step);
- *   3. wait 20 s for any thread it started, then exit 0.
+ *   ersc-load-x64 [self] [noinit] [steam]
+ *       load ersc.dll's imports, then LoadLibraryA("ersc.dll") in this process, then
+ *       call modengine_ext_init as Mod Engine 2 does, with a connector whose vtable
+ *       entries log and return 0 ("noinit" skips it); wait 20 s, exit 0.
+ *   ersc-load-x64 inject [steam]
+ *       what ersc_launcher.exe did on the iPad: start eldenring.exe (a copy of this exe,
+ *       next to it) suspended, and load ersc.dll into it with a remote thread starting at
+ *       LoadLibraryA. The first remote thread runs the new process's loader init, as the
+ *       injected thread did in the game. ersc.dll's imports are loaded the same way first
+ *       (the game has them loaded; the prefix's lookup of their upper-case names fails).
+ *       SteamAppId/SteamGameId are 1245620 in its environment. Waits for the thread,
+ *       then 20 s more, then ends the child.
+ *   ersc-load-x64 child
+ *       what eldenring.exe runs if it is ever resumed: nothing (sleeps).
  *
- * Every step is logged before it runs, to stdout and ersc-load-x64.log next to the exe,
- * so a crash shows which one triggered the single step. ersc.dll imports
- * steam_api64.dll (only SteamAPI_GetHSteamPipe); steam_api64-stub.c stands in for it.
+ * "steam" sets STEAMSTUB_RUNNING=1 (inherited by eldenring.exe): the stub steam_api64
+ * then reports a running Steam.
+ * Every step is logged before it runs, to stdout and ersc-load-x64.log next to the exe.
+ * ersc.dll imports steam_api64.dll (only SteamAPI_GetHSteamPipe); steam_api64-stub.c
+ * stands in for it.
  *
  * Build: tests/x64/build.sh ersc-load-x64
  */
@@ -43,6 +54,11 @@ static void say(const char *fmt, ...)
     if (g_fh != INVALID_HANDLE_VALUE) { WriteFile(g_fh, buf, n, &w, NULL); FlushFileBuffers(g_fh); }
 }
 
+/* ersc.dll's imports, by the bundle's file names (see "inject" above). */
+static const char *const c_deps[] = {"user32.dll", "ws2_32.dll", "advapi32.dll", "crypt32.dll",
+                                     "wldap32.dll", "normaliz.dll", "steam_api64.dll"};
+#define N_DEPS (sizeof(c_deps) / sizeof(c_deps[0]))
+
 /* Mod Engine 2's ModEngineExtensionConnector: an object with a vtable. ersc.dll may call
  * into it from modengine_ext_init; each entry logs its index and returns 0. */
 #define VT_N 32
@@ -62,28 +78,12 @@ static void *const c_stubs[VT_N] = {
 
 typedef ULONG64 (*ext_init_fn)(void *connector, void **extension);
 
-int main(int argc, char **argv)
+static int load_self(const char *dll, int do_init)
 {
-    char path[MAX_PATH];
-    DWORD n = GetModuleFileNameA(NULL, path, MAX_PATH);
-    if (n > 4 && n < MAX_PATH) {
-        memcpy(path + n - 4, ".log", 5);
-        g_fh = CreateFileA(path, GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS, 0, NULL);
+    for (unsigned i = 0; i < N_DEPS; i++) {
+        HMODULE d = LoadLibraryA(c_deps[i]);
+        say("[ersc-load] preload %s: %p (error %lu)", c_deps[i], (void *)d, d ? 0 : GetLastError());
     }
-    const char *dll = argc > 1 ? argv[1] : "ersc.dll";
-    int do_init = !(argc > 2 && !strcmp(argv[2], "noinit"));
-    memcpy(g_vtbl, c_stubs, sizeof(g_vtbl));
-
-    /* ersc.dll imports WS2_32.dll, ADVAPI32.dll, CRYPT32.dll ... in upper case; the
-     * prefix's lookup of those file names is case-sensitive, so load them first by the
-     * bundle's names, as the game has them loaded before Mod Engine 2 loads ersc.dll. */
-    static const char *const deps[] = {"user32.dll", "ws2_32.dll", "advapi32.dll", "crypt32.dll",
-                                       "wldap32.dll", "normaliz.dll", "steam_api64.dll"};
-    for (unsigned i = 0; i < sizeof(deps) / sizeof(deps[0]); i++) {
-        HMODULE d = LoadLibraryA(deps[i]);
-        say("[ersc-load] preload %s: %p (error %lu)", deps[i], (void *)d, d ? 0 : GetLastError());
-    }
-
     say("[ersc-load] pid %lu, LoadLibraryA(\"%s\") ...", GetCurrentProcessId(), dll);
     HMODULE h = LoadLibraryA(dll);
     DWORD err = GetLastError();
@@ -91,8 +91,7 @@ int main(int argc, char **argv)
         say("[ersc-load] LoadLibraryA failed: error %lu", err);
         return 1;
     }
-    say("[ersc-load] loaded at %p (single step expected at %p, handler %p)",
-        (void *)h, (char *)h + 0x30c390, (char *)h + 0x31eed6);
+    say("[ersc-load] loaded at %p", (void *)h);
 
     if (do_init) {
         ext_init_fn init = (ext_init_fn)GetProcAddress(h, "modengine_ext_init");
@@ -105,9 +104,101 @@ int main(int argc, char **argv)
                 r, ext, ext ? *(void **)ext : NULL);
         }
     }
-
     say("[ersc-load] waiting 20 s for ersc.dll's threads ...");
     Sleep(20000);
     say("[ersc-load] still alive, exiting 0");
     return 0;
+}
+
+/* LoadLibraryA(path) in the child on a new remote thread; returns the thread's exit code
+ * (the low 32 bits of the HMODULE, 0 on failure), or -1 if the thread did not finish. */
+static DWORD remote_load(HANDLE proc, const char *path, DWORD timeout_ms)
+{
+    SIZE_T len = strlen(path) + 1;
+    void *mem = VirtualAllocEx(proc, NULL, len, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    if (!mem || !WriteProcessMemory(proc, mem, path, len, NULL)) {
+        say("[ersc-load] remote %s: VirtualAllocEx/WriteProcessMemory failed: error %lu", path, GetLastError());
+        return 0;
+    }
+    FARPROC lla = GetProcAddress(GetModuleHandleA("kernel32.dll"), "LoadLibraryA");
+    DWORD tid = 0;
+    say("[ersc-load] remote LoadLibraryA(\"%s\") ...", path);
+    HANDLE t = CreateRemoteThread(proc, NULL, 0, (LPTHREAD_START_ROUTINE)lla, mem, 0, &tid);
+    if (!t) {
+        say("[ersc-load] CreateRemoteThread failed: error %lu", GetLastError());
+        return 0;
+    }
+    DWORD w = WaitForSingleObject(t, timeout_ms), code = (DWORD)-1;
+    if (w == WAIT_OBJECT_0) GetExitCodeThread(t, &code);
+    say("[ersc-load] remote LoadLibraryA(\"%s\") on thread %04lx: %s, exit code %08lx",
+        path, tid, w == WAIT_OBJECT_0 ? "finished" : "still running", code);
+    CloseHandle(t);
+    return w == WAIT_OBJECT_0 ? code : (DWORD)-1;
+}
+
+static int inject(const char *dir)
+{
+    char exe[MAX_PATH], cmd[MAX_PATH + 16], dll[MAX_PATH];
+    snprintf(exe, sizeof(exe), "%s\\eldenring.exe", dir);
+    snprintf(cmd, sizeof(cmd), "\"%s\" child", exe);
+    snprintf(dll, sizeof(dll), "%s\\ersc.dll", dir);
+    SetEnvironmentVariableA("SteamAppId", "1245620");
+    SetEnvironmentVariableA("SteamGameId", "1245620");
+
+    STARTUPINFOA si = {sizeof(si)};
+    PROCESS_INFORMATION pi;
+    say("[ersc-load] CreateProcess(%s, suspended) ...", cmd);
+    if (!CreateProcessA(exe, cmd, NULL, NULL, FALSE, CREATE_SUSPENDED, NULL, dir, &si, &pi)) {
+        say("[ersc-load] CreateProcess failed: error %lu", GetLastError());
+        return 1;
+    }
+    say("[ersc-load] eldenring.exe pid %lu, main thread %04lx (suspended)", pi.dwProcessId, pi.dwThreadId);
+
+    for (unsigned i = 0; i < N_DEPS; i++) remote_load(pi.hProcess, c_deps[i], 60000);
+    DWORD r = remote_load(pi.hProcess, dll, 240000);
+    DWORD code = 0;
+    GetExitCodeProcess(pi.hProcess, &code);
+    say("[ersc-load] ersc.dll remote load %s; eldenring.exe %s (exit code %08lx)",
+        r == (DWORD)-1 ? "did not finish" : r ? "succeeded" : "failed",
+        code == STILL_ACTIVE ? "still running" : "ended", code);
+
+    if (code == STILL_ACTIVE) {
+        say("[ersc-load] waiting 20 s for ersc.dll's threads ...");
+        if (WaitForSingleObject(pi.hProcess, 20000) == WAIT_OBJECT_0) {
+            GetExitCodeProcess(pi.hProcess, &code);
+            say("[ersc-load] eldenring.exe ended (exit code %08lx)", code);
+        } else {
+            say("[ersc-load] eldenring.exe still alive, ending it");
+            TerminateProcess(pi.hProcess, 0);
+        }
+    }
+    return 0;
+}
+
+int main(int argc, char **argv)
+{
+    const char *mode = argc > 1 ? argv[1] : "self";
+    if (!strcmp(mode, "child")) { Sleep(INFINITE); return 0; }
+
+    char path[MAX_PATH], dir[MAX_PATH];
+    DWORD n = GetModuleFileNameA(NULL, path, MAX_PATH);
+    if (n > 4 && n < MAX_PATH) {
+        memcpy(dir, path, n + 1);
+        char *s = strrchr(dir, '\\');
+        if (s) *s = 0;
+        memcpy(path + n - 4, ".log", 5);
+        g_fh = CreateFileA(path, GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS, 0, NULL);
+    } else {
+        strcpy(dir, ".");
+    }
+    memcpy(g_vtbl, c_stubs, sizeof(g_vtbl));
+    int noinit = 0;
+    for (int i = 2; i < argc; i++) {
+        if (!strcmp(argv[i], "steam")) SetEnvironmentVariableA("STEAMSTUB_RUNNING", "1");
+        if (!strcmp(argv[i], "noinit")) noinit = 1;
+    }
+    say("[ersc-load] mode %s, dir %s%s", mode, dir, GetEnvironmentVariableA("STEAMSTUB_RUNNING", NULL, 0) ? ", Steam stub running" : "");
+
+    if (!strcmp(mode, "inject")) return inject(dir);
+    return load_self("ersc.dll", !noinit);
 }
