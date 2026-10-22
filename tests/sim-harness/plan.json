@@ -12,8 +12,18 @@
   },
   "variants": [
     {
+      "ersc": "1.9.8",
+      "cfg_preset": "elden-ring-ersc",
+      "cfg": [
+        "quiet-log = 0"
+      ],
+      "run": [
+        "ersc-load-x64.exe inject"
+      ],
       "name": "ntdll-p2",
-      "ntdll": "p2",
+      "ntdll": "p2"
+    },
+    {
       "ersc": "1.9.8",
       "cfg_preset": "elden-ring-ersc",
       "cfg": [
@@ -21,11 +31,23 @@
       ],
       "run": [
         "ersc-load-x64.exe inject"
-      ]
+      ],
+      "name": "b76",
+      "pe_release": "build-76"
     },
     {
-      "name": "ntdll-p3",
-      "ntdll": "p3",
+      "ersc": "1.9.8",
+      "cfg_preset": "elden-ring-ersc",
+      "cfg": [
+        "quiet-log = 0"
+      ],
+      "run": [
+        "ersc-load-x64.exe self"
+      ],
+      "name": "ntdll-p2-self",
+      "ntdll": "p2"
+    },
+    {
       "ersc": "1.9.8",
       "cfg_preset": "elden-ring-ersc",
       "cfg": [
@@ -33,55 +55,12 @@
       ],
       "run": [
         "ersc-load-x64.exe inject"
-      ]
-    },
-    {
-      "name": "ntdll-p4",
-      "ntdll": "p4",
-      "ersc": "1.9.8",
-      "cfg_preset": "elden-ring-ersc",
-      "cfg": [
-        "quiet-log = 0"
       ],
-      "run": [
-        "ersc-load-x64.exe inject"
-      ]
-    },
-    {
-      "name": "ntdll-p5",
-      "ntdll": "p5",
-      "ersc": "1.9.8",
-      "cfg_preset": "elden-ring-ersc",
-      "cfg": [
-        "quiet-log = 0"
-      ],
-      "run": [
-        "ersc-load-x64.exe inject"
-      ]
-    },
-    {
-      "name": "ntdll-p6",
-      "ntdll": "p6",
-      "ersc": "1.9.8",
-      "cfg_preset": "elden-ring-ersc",
-      "cfg": [
-        "quiet-log = 0"
-      ],
-      "run": [
-        "ersc-load-x64.exe inject"
-      ]
-    },
-    {
-      "name": "ntdll-p7",
+      "name": "ntdll-p7-rtcs",
       "ntdll": "p7",
-      "ersc": "1.9.8",
-      "cfg_preset": "elden-ring-ersc",
-      "cfg": [
-        "quiet-log = 0"
-      ],
-      "run": [
-        "ersc-load-x64.exe inject"
-      ]
+      "env": {
+        "MADEIRA_RTCS_LOG": "all"
+      }
     }
   ],
   "ntdll_builds": {

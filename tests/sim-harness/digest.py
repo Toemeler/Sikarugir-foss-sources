@@ -80,7 +80,21 @@ def digest(log):
     for name in mods:
         _, soi = image_info(os.path.join(DLLS, name))
         sizes[name] = soi or 0x100000
+    # The harness's own Mach-O (ml989: "running image <path> base=0x..."): symbolized with atos.
+    host = None
+    for l in text:
+        m = re.search(r'ml989: running image (\S+) base=0x([0-9a-f]+)', l)
+        if m: host = (m.group(1), int(m.group(2), 16)); break
+    def host_sym(a):
+        if not host or not (host[1] <= a < host[1] + 0x8000000): return None
+        try:
+            r = subprocess.run(['atos', '-o', host[0], '-l', hex(host[1]), hex(a)], capture_output=True, text=True, timeout=30)
+            return '%s+0x%x %s' % (os.path.basename(host[0]), a - host[1], r.stdout.strip())
+        except Exception as e:
+            return '%s+0x%x (atos: %s)' % (os.path.basename(host[0]), a - host[1], e)
     def where(a):
+        h = host_sym(a)
+        if h: return h
         for lo, hi, name, pe in pools:
             if lo <= a < hi:
                 s = symbolize(name, a - lo) if ALIASES.get(name, name) in ('xtajit64.dll', 'ntdll.dll') else ''
@@ -135,8 +149,19 @@ def digest(log):
             n += 1
             p('  %s' % l.strip()[:160])
             p('      pc %s' % where(int(m.group(1), 16)))
+        elif any(k in l for k in ('[veh-corrupt] #', '[veh-restore]', '[exc] ml811', 'call_seh_handlers invalid')):
+            p('  ' + l.strip()[:240])
         elif any(k in l for k in ('unable to dispatch', 'stack-ovf]', '[veh] calling', 'NtTerminateProcess', 'abort_process')):
             p('  ' + l.strip()[:200])
+
+    # Guest/host addresses that were executed but belong to no PE module (AV EXEC, [veh] Rip).
+    seen = set()
+    for l in text:
+        for m in re.finditer(r'(?:AV EXEC of |Address: |Rip=)([0-9A-Fa-f]{9,16})', l):
+            a = int(m.group(1), 16)
+            if a in seen or len(seen) >= 16: continue
+            seen.add(a)
+            p('  addr %#x = %s' % (a, where(a)))
 
     p('--- last 25 lines')
     tail = [l for l in text if l.strip() and not l.startswith(('[fault-tls]', '[fault-full]', '[fault-host]', '[x64-iat]'))]
