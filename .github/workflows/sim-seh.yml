@@ -462,6 +462,9 @@ jobs:
         continue-on-error: true
         run: |
           T=$(jq -r '.timeout // 240' <<<"$VARIANT")
+          # The variant's madeira.cfg (cfg_preset: a GameRecommendations.swift entry, as a device applies it).
+          DOCS="$HOME/Library/Developer/CoreSimulator/Devices/$(cat tests/sim-harness/out/udid)/data/Documents"
+          python3 tests/sim-harness/make_cfg.py app/Madeira/GameRecommendations.swift "$DOCS/madeira.cfg"
           while IFS= read -r kv; do [ -n "$kv" ] && export "SIMCTL_CHILD_$kv"; done \
             < <(jq -r '(.env // {}) | to_entries[] | "\(.key)=\(.value)"' <<<"$VARIANT")
           RC=0

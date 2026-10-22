@@ -1,5 +1,5 @@
 {
-  "comment": "One push = one experiment. Every variant is a CI job of its own: its own simulator, its 'run' lines (exe + args, run one after the other), its 'env' (exported to the harness as SIMCTL_CHILD_*), 'timeout' (seconds per run line, default 240), and 'ersc' (a key of ersc_builds, downloaded to system32/ersc.dll). See README.md.",
+  "comment": "One push = one experiment. Every variant is a CI job of its own: its own simulator, its 'run' lines (exe + args, run one after the other), 'env' (exported to the harness as SIMCTL_CHILD_*), 'cfg_preset' (a GameRecommendations.swift id: that game's madeira.cfg as a device applies it) and 'cfg' (lines after it), 'timeout' (seconds per run line, default 240), and 'ersc' (a key of ersc_builds, downloaded to system32/ersc.dll). See README.md.",
   "ersc_builds": {
     "1.9.8": {
       "url": "https://github.com/Toemeler/ersc-testbin/releases/download/ersc-198/ersc.dll",
@@ -11,9 +11,13 @@
     }
   },
   "variants": [
-    {"name": "self-1.9.8", "ersc": "1.9.8", "run": ["ersc-load-x64.exe self"]},
-    {"name": "inject-1.9.8", "ersc": "1.9.8", "run": ["ersc-load-x64.exe inject"]},
-    {"name": "inject-steam-1.9.8", "ersc": "1.9.8", "run": ["ersc-load-x64.exe inject steam"]},
-    {"name": "inject-2.0.1", "ersc": "2.0.1", "run": ["ersc-load-x64.exe inject"]}
+    {"name": "inject-cfg-1.9.8", "ersc": "1.9.8", "cfg_preset": "elden-ring-ersc", "cfg": ["quiet-log = 0"],
+     "run": ["ersc-load-x64.exe inject"]},
+    {"name": "self-cfg-1.9.8", "ersc": "1.9.8", "cfg_preset": "elden-ring-ersc", "cfg": ["quiet-log = 0"],
+     "run": ["ersc-load-x64.exe self"]},
+    {"name": "self-smc-1.9.8", "ersc": "1.9.8", "cfg": ["env.MADEIRA_SMC_HOST_PAGE = 1"],
+     "run": ["ersc-load-x64.exe self"]},
+    {"name": "inject-cfg-2.0.1", "ersc": "2.0.1", "cfg_preset": "elden-ring-ersc", "cfg": ["quiet-log = 0"],
+     "run": ["ersc-load-x64.exe inject"]}
   ]
 }

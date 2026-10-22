@@ -92,6 +92,10 @@ def digest(log):
                     return '%s+0x%x%s' % (name, a - b, ' ' + s if s else '')
         return '?'
     if 'ersc.dll' in mods: p('ersc.dll at %s' % ', '.join(hex(b) for b in mods['ersc.dll']))
+    cfg = sorted(set(l.strip() for l in text if '[madeira-env]' in l or 'pseudo-process writes' in l))
+    if cfg: p('config: ' + ' | '.join(c.replace('[madeira-env] ', '') for c in cfg)[:600])
+    smc = sum('[smc-host-page]' in l for l in text)
+    if smc: p('[smc-host-page] lines: %d' % smc)
 
     for g in sorted(glob.glob(os.path.join(LOGS, 'guest-*.log'))):
         if os.path.basename(g)[6:-4] in (exe[:-4], 'eldenring'):

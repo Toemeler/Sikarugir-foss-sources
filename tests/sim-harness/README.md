@@ -59,6 +59,10 @@ job of its own (its own simulator, all in parallel):
   one after the other; `timeout`: seconds per line (default 240).
 - `env`: exported to the harness process (`SIMCTL_CHILD_*`), so Madeira's own
   `MADEIRA_*`/`FEX_*` switches work.
+- `cfg_preset`: a `GameRecommendations.swift` id (e.g. `elden-ring-ersc`); that
+  game's config is written to the simulator's `Documents/madeira.cfg`, as the app
+  applies it on a device (its `env.*` lines are exported, `local-write` etc. read).
+  `cfg`: lines after it (later keys win), also usable alone.
 - `ersc`: a key of `ersc_builds`; that ersc.dll is downloaded into the bundle
   (system32) and checked against its sha256. It is never committed here.
 
