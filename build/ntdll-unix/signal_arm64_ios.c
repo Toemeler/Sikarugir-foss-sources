@@ -8110,7 +8110,17 @@ static int ios_mach_deliver_guest_exception_inner( thread_t thread, arm_thread_s
           ios_jit_low_contains( (uintptr_t)pc ) ||   /* madeira-bcd pool-low: FEX code in region C */
           pc < 0x100000000ULL ||
           (pc >= 0x7000000000ULL && pc < 0x7400000000ULL)))
+    {
+        static int host_decline_n;   /* sim-seh: which host-pc faults go to the signal path */
+        if (host_decline_n < 16)
+        {
+            host_decline_n++;
+            dprintf( 2, "[mach-deliver] sim-seh host-pc decline #%d pc=0x%llx addr=0x%llx info0=%lu\n",
+                     host_decline_n, (unsigned long long)pc, (unsigned long long)fault_addr,
+                     (unsigned long)rec.ExceptionInformation[0] );
+        }
         return 0;
+    }
 
     /* transient-retry absorption: races with concurrent mprotect / FEX
      * invalidation are fixed by re-execution and were free retries under
@@ -8700,6 +8710,19 @@ static BOOL handle_syscall_fault( ucontext_t *context, EXCEPTION_RECORD *rec )
 
     if (!is_inside_syscall( SP_sig(context) )) return FALSE;
 
+#ifdef WINE_IOS
+    {
+        static int syscall_fault_n;
+        if (syscall_fault_n < 16)
+        {
+            syscall_fault_n++;
+            ERR( "[syscall-fault] #%d code=%x addr=%p pc=%p info0=%lu info1=%lx -> %s frame=%p frame->pc=%p\n",
+                 syscall_fault_n, (unsigned int)rec->ExceptionCode, rec->ExceptionAddress, (void *)PC_sig(context),
+                 (unsigned long)rec->ExceptionInformation[0], (unsigned long)rec->ExceptionInformation[1],
+                 ntdll_get_thread_data()->jmp_buf ? "longjmp" : "return the status", frame, (void *)frame->pc );
+        }
+    }
+#endif
     TRACE( "code=%x flags=%x addr=%p pc=%p tid=%04x\n",
            rec->ExceptionCode, rec->ExceptionFlags, rec->ExceptionAddress,
            (void *)PC_sig(context), GetCurrentThreadId() );
@@ -10669,6 +10692,24 @@ static void segv_handler( int signal, siginfo_t *siginfo, void *sigcontext )
     else rec.ExceptionInformation[0] = EXCEPTION_READ_FAULT;
     rec.ExceptionInformation[1] = (ULONG_PTR)siginfo->si_addr;
 #ifdef WINE_IOS
+    /* sim-seh: a fault in host (unix-side) code -- e.g. a syscall storing its result into a
+     * guest page that FEX keeps write-trapped for SMC. Name the path it takes. Capped. */
+    {
+        extern void *ios_jit_rx_base_global;
+        extern size_t ios_jit_pool_size_global;
+        static int host_fault_n;
+        uintptr_t hp = (uintptr_t)PC_sig(context), hrx = (uintptr_t)ios_jit_rx_base_global;
+        if (!(hrx && hp >= hrx && hp < hrx + ios_jit_pool_size_global) && !ios_jit_low_contains( hp ) &&
+            hp >= 0x100000000ULL && hp < 0x7000000000ULL && host_fault_n < 16)
+        {
+            host_fault_n++;
+            ERR( "[host-fault] #%d pc=%p lr=%p addr=%p esr=%llx info0=%lu sp=%p inside_syscall=%d frame=%p
+",
+                 host_fault_n, (void *)hp, (void *)LR_sig(context), siginfo->si_addr, (unsigned long long)esr,
+                 (unsigned long)rec.ExceptionInformation[0], (void *)SP_sig(context),
+                 is_inside_syscall( SP_sig(context) ), get_syscall_frame() );
+        }
+    }
     {
         static uintptr_t last_fault_pc = 0;
         static int fault_repeat_count = 0;
