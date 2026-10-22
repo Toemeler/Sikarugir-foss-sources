@@ -8112,6 +8112,36 @@ static int ios_mach_deliver_guest_exception_inner( thread_t thread, arm_thread_s
           (pc >= 0x7000000000ULL && pc < 0x7400000000ULL)))
     {
         static int host_decline_n;   /* sim-seh: which host-pc faults go to the signal path */
+
+        /* sim-seh: a syscall's unix side storing its result into a guest page that FEX keeps
+         * write-trapped for self-modifying-code detection (MADEIRA_SMC_HOST_PAGE: Themida's
+         * EXECUTE|WRITE sections). Seamless Co-op's ersc.dll passes NtOpenThreadToken a handle
+         * pointer inside its own image; the unix NtOpenThreadToken's `*handle = 0` faulted, was
+         * declined here, and came back to the guest as an EXEC fault at a host pc with the
+         * syscall frame as its address -- the guest's VEH then wrecked the thread. On Windows the
+         * kernel's store simply lands. Deliver it as the write fault it is, now: FEX's
+         * ResetToConsistentState untraps the host page (HandleRWXAccessViolation) and
+         * NtContinueNative resumes the store; a genuinely read-only target still reaches the
+         * guest as an access violation. Only for code of the image holding this handler (the unix
+         * side), never for system dylibs. */
+        {
+            Dl_info hdi, self_di;
+            if (!is_align && rec.ExceptionCode == EXCEPTION_ACCESS_VIOLATION &&
+                rec.ExceptionInformation[0] == EXCEPTION_WRITE_FAULT && fault_addr >= 0x100000000ULL &&
+                dladdr( (const void *)(uintptr_t)pc, &hdi ) &&
+                dladdr( (const void *)ios_mach_deliver_guest_exception, &self_di ) && hdi.dli_fbase == self_di.dli_fbase)
+            {
+                static int host_write_n;
+                if (host_write_n < 16)
+                {
+                    host_write_n++;
+                    dprintf( 2, "[mach-deliver] sim-seh unix-side write #%d pc=0x%llx (%s) addr=0x%llx -> guest write fault\n",
+                             host_write_n, (unsigned long long)pc, hdi.dli_sname ? hdi.dli_sname : "?",
+                             (unsigned long long)fault_addr );
+                }
+                goto dispatch;
+            }
+        }
         if (host_decline_n < 16)
         {
             host_decline_n++;

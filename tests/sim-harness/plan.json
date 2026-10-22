@@ -22,6 +22,30 @@
       ],
       "name": "ntdll-p2",
       "ntdll": "p2"
+    },
+    {
+      "ersc": "1.9.8",
+      "cfg_preset": "elden-ring-ersc",
+      "cfg": [
+        "quiet-log = 0"
+      ],
+      "run": [
+        "ersc-load-x64.exe inject"
+      ],
+      "name": "ntdll-p7",
+      "ntdll": "p7"
+    },
+    {
+      "ersc": "1.9.8",
+      "cfg_preset": "elden-ring-ersc",
+      "cfg": [
+        "quiet-log = 0"
+      ],
+      "run": [
+        "ersc-load-x64.exe inject"
+      ],
+      "name": "b76",
+      "pe_release": "build-76"
     }
   ],
   "ntdll_builds": {
