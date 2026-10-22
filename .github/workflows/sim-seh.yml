@@ -3,11 +3,15 @@
 # fixes can be checked without a device.
 #
 # Every native library is built with MAD_SDK=iphonesimulator (the build scripts
-# default to iphoneos, so the release build in build.yml is unchanged).
+# default to iphoneos, so the release build in build.yml is unchanged). The PE
+# side (ntdll.dll and the rest of arm64ec-windows, xtajit64.dll) is
+# SDK-independent and is exactly what the release ships.
 #
-#   fex-sim   FEXCore static libraries for the simulator SDK.
+#   fex-sim   FEXCore static libraries for the simulator SDK (compile check).
 #   unix-sim  GnuTLS/FFmpeg/FreeType, Wine's configure, then the ntdll,
 #             wineserver and win32u unix sides for the simulator SDK.
+#   harness   tests/sim-harness: links them into a headless runner, boots an
+#             iPad Pro (M4) simulator and runs the guest test exes in it.
 
 name: Simulator SEH harness
 
@@ -15,6 +19,10 @@ on:
   push:
     branches: [codex/sim-seh-20261022]
   workflow_dispatch:
+    inputs:
+      exes:
+        description: "Guest exes to run, space separated"
+        default: "fib-x64.exe tfstep-x64.exe"
 
 permissions:
   contents: read
@@ -30,22 +38,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  sim-probe:
-    name: Simulator runtimes on the runner
-    runs-on: macos-26
-    timeout-minutes: 30
-    steps:
-      - name: Xcodes, SDKs, runtimes, device types
-        run: |
-          ls -d /Applications/Xcode*.app
-          NEWEST=$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | tail -1 || true)
-          if [ -n "$NEWEST" ]; then sudo xcode-select -s "$NEWEST"; fi
-          xcodebuild -version
-          xcodebuild -showsdks | grep -i -E 'ios|simulator'
-          xcrun simctl list runtimes
-          xcrun simctl list devicetypes | grep -i ipad
-          xcrun simctl runtime list || true
-
   fex-sim:
     name: FEXCore (iphonesimulator)
     runs-on: macos-26
@@ -57,11 +49,9 @@ jobs:
           NEWEST=$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | tail -1 || true)
           if [ -n "$NEWEST" ]; then sudo xcode-select -s "$NEWEST"; fi
           xcodebuild -version
-          xcrun --sdk iphonesimulator --show-sdk-path
       - name: FEX source
         run: git submodule update --init --recursive --depth 1 --jobs 4 -- FEX
       - name: "Cache: FEX (sim)"
-        id: c-fex
         uses: actions/cache@v4
         with:
           key: fex-sim-v1-${{ hashFiles('build/fex-ios/build.sh') }}-${{ github.sha }}
@@ -75,7 +65,7 @@ jobs:
           command -v ninja >/dev/null || brew install ninja
           build/fex-ios/build.sh
           for a in $(find FEX/build-ios -name '*.a'); do
-            echo "$a: $(xcrun vtool -show-build "$a" 2>/dev/null | grep -m1 -E 'platform' || true)"
+            echo "$a: $(xcrun vtool -show-build "$a" 2>/dev/null | grep -m1 platform || true)"
           done
 
   unix-sim:
@@ -84,13 +74,30 @@ jobs:
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
+      - name: Cache key
+        id: key
+        run: |
+          set -euo pipefail
+          k() { printf '%s\n' "$@" | shasum -a 256 | cut -c1-20; }
+          t() { git rev-parse "HEAD:$1"; }
+          echo "libs=unix-sim-v1-$(k "$(t wine)" "$(t build/ntdll-unix)" "$(t build/wineserver)" \
+            "$(t build/win32u-unix)" "$(t build/crypto-unix)" "$(t build/madsync)" \
+            "$(t build/hidpad)" "$(t build/madeira_cfg.h)" "$(t app/Madeira/Winios)" \
+            "$(t build/gnutls-ios)" "$(t build/ffmpeg)" "$(t build/freetype-ios)" "$FREETYPE_TAG" \
+            "$(git hash-object .github/scripts/configure_wine.sh)")" | tee -a "$GITHUB_OUTPUT"
+      - name: "Cache: simulator unix libraries"
+        id: c-libs
+        uses: actions/cache@v4
+        with:
+          key: ${{ steps.key.outputs.libs }}
+          path: sim-libs
       - name: Toolchain
+        if: steps.c-libs.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
           NEWEST=$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | tail -1 || true)
           if [ -n "$NEWEST" ]; then sudo xcode-select -s "$NEWEST"; fi
           xcodebuild -version
-          xcrun --sdk iphonesimulator --show-sdk-path
           brew install bison flex gnutls freetype pkgconf
           mkdir -p toolchains
           curl -fsSL --retry 3 -o "toolchains/$MINGW.tar.xz" \
@@ -100,21 +107,29 @@ jobs:
           rm "toolchains/$MINGW.tar.xz"
           git clone -q --depth 1 --branch "$FREETYPE_TAG" https://github.com/freetype/freetype.git research/freetype
       - name: Wine source
+        if: steps.c-libs.outputs.cache-hit != 'true'
         run: git submodule update --init --recursive --depth 1 --jobs 4 -- wine
 
       - name: "Cache: GnuTLS (sim)"
+        if: steps.c-libs.outputs.cache-hit != 'true'
         id: c-gnutls
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           key: gnutls-sim-v1-${{ hashFiles('build/gnutls-ios/**') }}
           path: toolchains/gnutls-ios
       - name: GMP, Nettle, GnuTLS
-        if: steps.c-gnutls.outputs.cache-hit != 'true'
+        if: steps.c-libs.outputs.cache-hit != 'true' && steps.c-gnutls.outputs.cache-hit != 'true'
         run: build/gnutls-ios/build.sh > gnutls.log 2>&1 || { tail -80 gnutls.log; exit 1; }
-
+      - name: "Save: GnuTLS (sim)"
+        if: steps.c-libs.outputs.cache-hit != 'true' && steps.c-gnutls.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          key: gnutls-sim-v1-${{ hashFiles('build/gnutls-ios/**') }}
+          path: toolchains/gnutls-ios
       - name: "Cache: FFmpeg (sim)"
+        if: steps.c-libs.outputs.cache-hit != 'true'
         id: c-ffmpeg
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           key: ffmpeg-sim-v1-${{ hashFiles('build/ffmpeg/**') }}
           path: |
@@ -124,36 +139,50 @@ jobs:
             app/Madeira/libswresample.a
             app/Madeira/libavutil.a
       - name: FFmpeg
-        if: steps.c-ffmpeg.outputs.cache-hit != 'true'
+        if: steps.c-libs.outputs.cache-hit != 'true' && steps.c-ffmpeg.outputs.cache-hit != 'true'
         run: build/ffmpeg/build.sh > ffmpeg.log 2>&1 || { tail -80 ffmpeg.log; exit 1; }
-
+      - name: "Save: FFmpeg (sim)"
+        if: steps.c-libs.outputs.cache-hit != 'true' && steps.c-ffmpeg.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          key: ffmpeg-sim-v1-${{ hashFiles('build/ffmpeg/**') }}
+          path: |
+            toolchains/ffmpeg-ios
+            app/Madeira/libavformat.a
+            app/Madeira/libavcodec.a
+            app/Madeira/libswresample.a
+            app/Madeira/libavutil.a
       - name: FreeType
+        if: steps.c-libs.outputs.cache-hit != 'true'
         run: build/freetype-ios/build.sh > freetype.log 2>&1 || { tail -80 freetype.log; exit 1; }
-
       - name: Wine (configure)
+        if: steps.c-libs.outputs.cache-hit != 'true'
         run: .github/scripts/configure_wine.sh
 
       - name: ntdll unix side
+        if: steps.c-libs.outputs.cache-hit != 'true'
         id: ntdll
         continue-on-error: true
         run: |
           set -o pipefail
           build/ntdll-unix/build.sh 2>&1 | tee ntdll.log || true
-          grep -q '^Results: [0-9]* succeeded, 0 failed' ntdll.log
+          grep -q '^Results: [0-9]* succeeded, 0 failed' ntdll.log && test -s app/Madeira/libntdll_unix.a
       - name: wineserver
+        if: steps.c-libs.outputs.cache-hit != 'true'
         id: wineserver
         continue-on-error: true
         run: PATH="$PATH:$PWD/toolchains/$MINGW/bin" build/wineserver/build.sh
       - name: win32u unix side
+        if: steps.c-libs.outputs.cache-hit != 'true'
         id: win32u
         continue-on-error: true
         run: |
           set -o pipefail
           build/win32u-unix/build.sh 2>&1 | tee win32u.log || true
-          ! grep -q 'FAILED' win32u.log
+          ! grep -q 'FAILED' win32u.log && test -s app/Madeira/libwin32u_unix.a
 
       - name: Collect logs
-        if: always()
+        if: always() && steps.c-libs.outputs.cache-hit != 'true'
         run: |
           mkdir -p logs
           cp *.log logs/ 2>/dev/null || true
@@ -162,17 +191,140 @@ jobs:
             find "build/$d/obj" -maxdepth 1 \( -name '*.err' -o -name 'err-*' \) -size +0 \
               -exec cp {} "logs/$d/" \; 2>/dev/null || true
           done
-          ls -l app/Madeira/libntdll_unix.a app/Madeira/libwineserver.a app/Madeira/libwin32u_unix.a 2>&1 || true
       - uses: actions/upload-artifact@v4
-        if: always()
+        if: always() && steps.c-libs.outputs.cache-hit != 'true'
         with:
           name: unix-sim-logs
           path: logs
           if-no-files-found: ignore
           retention-days: 7
       - name: Verdict
-        if: always()
+        if: steps.c-libs.outputs.cache-hit != 'true'
         run: |
           echo "ntdll: ${{ steps.ntdll.outcome }}  wineserver: ${{ steps.wineserver.outcome }}  win32u: ${{ steps.win32u.outcome }}"
           [ "${{ steps.ntdll.outcome }}" = success ] && [ "${{ steps.wineserver.outcome }}" = success ] \
             && [ "${{ steps.win32u.outcome }}" = success ]
+      - name: Stage the libraries
+        if: steps.c-libs.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p sim-libs/app sim-libs/gnutls
+          cp app/Madeira/libntdll_unix.a app/Madeira/libwineserver.a app/Madeira/libwin32u_unix.a \
+             app/Madeira/libavformat.a app/Madeira/libavcodec.a app/Madeira/libswresample.a \
+             app/Madeira/libavutil.a sim-libs/app/
+          cp toolchains/gnutls-ios/lib/*.a sim-libs/gnutls/
+          ls -l sim-libs/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sim-libs
+          path: sim-libs
+          if-no-files-found: error
+          retention-days: 3
+
+  harness:
+    name: Run guest exes in the simulator
+    needs: unix-sim
+    runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      EXES: ${{ inputs.exes || 'fib-x64.exe tfstep-x64.exe' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: |
+          set -euo pipefail
+          NEWEST=$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | tail -1 || true)
+          if [ -n "$NEWEST" ]; then sudo xcode-select -s "$NEWEST"; fi
+          xcodebuild -version
+          mkdir -p toolchains
+          curl -fsSL --retry 3 -o "toolchains/$MINGW.tar.xz" \
+            "https://github.com/mstorsjo/llvm-mingw/releases/download/20260421/$MINGW.tar.xz"
+          echo "$MINGW_SHA256  toolchains/$MINGW.tar.xz" | shasum -a 256 -c -
+          tar -xJf "toolchains/$MINGW.tar.xz" -C toolchains
+          rm "toolchains/$MINGW.tar.xz"
+      - uses: actions/download-artifact@v4
+        with:
+          name: sim-libs
+          path: sim-libs
+      - name: Place the simulator libraries
+        run: |
+          set -euo pipefail
+          cp sim-libs/app/*.a app/Madeira/
+          mkdir -p toolchains/gnutls-ios/lib && cp sim-libs/gnutls/*.a toolchains/gnutls-ios/lib/
+          for a in app/Madeira/libntdll_unix.a toolchains/gnutls-ios/lib/libgnutls.a; do
+            echo "$a: $(xcrun vtool -show-build "$a" 2>/dev/null | grep -m1 platform || true)"
+          done
+
+      # xtajit64.dll exactly as the release builds it (pinned FEX + build/fex-arm64ec/patches):
+      # the release workflow's own cache entry when it exists (same key), built otherwise.
+      - name: xtajit64.dll cache key
+        id: fexec
+        run: |
+          k() { printf '%s\n' "$@" | shasum -a 256 | cut -c1-20; }
+          t() { git rev-parse "HEAD:$1"; }
+          echo "key=fexec-v1-$(k "$(t FEX)" "$(t build/fex-arm64ec)" "$MINGW")" | tee -a "$GITHUB_OUTPUT"
+      - name: "Cache: FEX ARM64EC"
+        id: c-fexec
+        uses: actions/cache/restore@v4
+        with:
+          key: ${{ steps.fexec.outputs.key }}
+          path: app/Madeira/arm64ec-windows/xtajit64.dll
+      - name: FEX ARM64EC (xtajit64.dll)
+        if: steps.c-fexec.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          command -v ninja >/dev/null || brew install ninja
+          git submodule update --init --recursive --depth 1 --jobs 4 -- FEX
+          build/fex-arm64ec/build.sh
+      - name: "Save: FEX ARM64EC"
+        if: steps.c-fexec.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          key: ${{ steps.fexec.outputs.key }}
+          path: app/Madeira/arm64ec-windows/xtajit64.dll
+
+      - name: Guest test exes
+        run: |
+          set -euo pipefail
+          for n in fib-x64 tfstep-x64 sehctx-x64; do tests/x64/build.sh "$n" | tail -3; done
+          ls -l app/Madeira/arm64ec-windows/*.exe | head -20
+          shasum -a 256 app/Madeira/arm64ec-windows/ntdll.dll app/Madeira/arm64ec-windows/xtajit64.dll
+
+      - name: Build the harness
+        run: tests/sim-harness/build.sh
+      - name: Boot the simulator
+        run: tests/sim-harness/boot.sh
+
+      - name: Run
+        id: run
+        continue-on-error: true
+        run: |
+          RC=0
+          for e in $EXES; do
+            SIM_TIMEOUT=240 tests/sim-harness/run.sh "$e"; r=$?
+            echo "--- $e: exit $r; harness lines and guest output ---"
+            grep -E '^\[sim-harness\]|\[sim-stub\]|MADEIRA-|tfstep-x64|sehctx|fib|\[guest-seh\]|err:' \
+              "tests/sim-harness/out/logs/$e.log" | head -300 || true
+            for g in tests/sim-harness/out/logs/guest-*.log; do [ -f "$g" ] && { echo "--- $g ---"; cat "$g"; }; done
+            [ $r = 0 ] || RC=1
+          done
+          exit $RC
+      - name: Verdict (tfstep)
+        if: always()
+        run: |
+          L=tests/sim-harness/out/logs
+          grep -h 'cases match x86 hardware' $L/*.log | sort -u || echo "tfstep summary line not found"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: harness-logs
+          path: |
+            tests/sim-harness/out/logs
+            tests/sim-harness/out/stubs.txt
+            tests/sim-harness/out/link1.err
+            tests/sim-harness/out/obj/*.err
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Fail if the run failed
+        if: steps.run.outcome != 'success'
+        run: exit 1
