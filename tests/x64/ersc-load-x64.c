@@ -18,7 +18,8 @@
  *       injected thread did in the game. ersc.dll's imports are loaded the same way first
  *       (the game has them loaded; the prefix's lookup of their upper-case names fails).
  *       SteamAppId/SteamGameId are 1245620 in its environment. Waits for the thread,
- *       then 20 s more, then ends the child.
+ *       then 20 s more ("wait=N": N s), then ends the child. "resume" resumes the child's main
+ *       thread once ersc.dll is loaded, as ersc_launcher.exe does before the game runs.
  *   ersc-load-x64 child
  *       what eldenring.exe runs if it is ever resumed: nothing (sleeps).
  *
@@ -35,6 +36,7 @@
 #include <stdio.h>
 #include <stdarg.h>
 #include <string.h>
+#include <stdlib.h>
 
 static HANDLE g_fh = INVALID_HANDLE_VALUE;
 
@@ -136,6 +138,8 @@ static DWORD remote_load(HANDLE proc, const char *path, DWORD timeout_ms)
     return w == WAIT_OBJECT_0 ? code : (DWORD)-1;
 }
 
+static int g_resume, g_wait_ms = 20000;
+
 static int inject(const char *dir)
 {
     char exe[MAX_PATH], cmd[MAX_PATH + 16], dll[MAX_PATH];
@@ -162,9 +166,13 @@ static int inject(const char *dir)
         r == (DWORD)-1 ? "did not finish" : r ? "succeeded" : "failed",
         code == STILL_ACTIVE ? "still running" : "ended", code);
 
+    if (code == STILL_ACTIVE && g_resume) {
+        say("[ersc-load] ResumeThread(eldenring.exe main thread %04lx), as ersc_launcher does ...", pi.dwThreadId);
+        say("[ersc-load] ResumeThread -> %ld", (long)ResumeThread(pi.hThread));
+    }
     if (code == STILL_ACTIVE) {
-        say("[ersc-load] waiting 20 s for ersc.dll's threads ...");
-        if (WaitForSingleObject(pi.hProcess, 20000) == WAIT_OBJECT_0) {
+        say("[ersc-load] waiting %d s for ersc.dll's threads ...", g_wait_ms / 1000);
+        if (WaitForSingleObject(pi.hProcess, g_wait_ms) == WAIT_OBJECT_0) {
             GetExitCodeProcess(pi.hProcess, &code);
             say("[ersc-load] eldenring.exe ended (exit code %08lx)", code);
         } else {
@@ -196,6 +204,8 @@ int main(int argc, char **argv)
     for (int i = 2; i < argc; i++) {
         if (!strcmp(argv[i], "steam")) SetEnvironmentVariableA("STEAMSTUB_RUNNING", "1");
         if (!strcmp(argv[i], "noinit")) noinit = 1;
+        if (!strcmp(argv[i], "resume")) g_resume = 1;
+        if (!strncmp(argv[i], "wait=", 5)) g_wait_ms = atoi(argv[i] + 5) * 1000;
     }
     say("[ersc-load] mode %s, dir %s%s", mode, dir, GetEnvironmentVariableA("STEAMSTUB_RUNNING", NULL, 0) ? ", Steam stub running" : "");
 
