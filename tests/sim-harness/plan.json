@@ -8,35 +8,38 @@
     "2.0.1": {
       "url": "https://github.com/Toemeler/ersc-testbin/releases/download/ersc-1/ersc.dll",
       "sha256": "fcd11a1849fd37851bb449be30f1525cf498f63fd1fa568c4e15030ebe7cb251"
+    },
+    "1.9.9": {
+      "repo": "Toemeler/er-testbin-private",
+      "tag": "ersc-199",
+      "sha256": "b34da36f537dfce14551e1083c5f19ce7e33d8235034ef03cd549de4a9107594"
     }
   },
   "variants": [
     {
-      "ersc": "2.0.1",
+      "ersc": "1.9.9",
       "ntdll": "p2",
       "cfg_preset": "elden-ring-ersc",
       "cfg": [
         "quiet-log = 0"
       ],
       "timeout": 1500,
-      "game_exe": "er",
-      "name": "p2-game",
+      "name": "199-self",
       "run": [
-        "ersc-load-x64.exe inject wait=120"
+        "ersc-load-x64.exe self wait=60"
       ]
     },
     {
-      "ersc": "2.0.1",
+      "ersc": "1.9.9",
       "ntdll": "p7",
       "cfg_preset": "elden-ring-ersc",
       "cfg": [
         "quiet-log = 0"
       ],
       "timeout": 1500,
-      "game_exe": "er",
-      "name": "p7-game",
+      "name": "199-p7-self",
       "run": [
-        "ersc-load-x64.exe inject wait=120"
+        "ersc-load-x64.exe self wait=60"
       ]
     }
   ],

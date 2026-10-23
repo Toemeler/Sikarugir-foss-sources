@@ -472,13 +472,22 @@ jobs:
       # Seamless Co-op's ersc.dll: a test input only, never committed here or bundled into a
       # release; fetched from its own repo (plan.json "ersc_builds") and checked against its hash.
       - name: ersc.dll
+        env:
+          TESTBIN_TOKEN: ${{ secrets.TESTBIN_TOKEN }}
         run: |
           set -euo pipefail
           v=$(jq -r '.ersc // empty' <<<"$VARIANT")
           [ -n "$v" ] || { echo "no ersc.dll for this variant"; exit 0; }
           url=$(jq -r --arg v "$v" '.ersc_builds[$v].url' tests/sim-harness/plan.json)
           sha=$(jq -r --arg v "$v" '.ersc_builds[$v].sha256' tests/sim-harness/plan.json)
-          curl -fsSL --retry 3 -o app/Madeira/arm64ec-windows/ersc.dll "$url"
+          repo=$(jq -r --arg v "$v" '.ersc_builds[$v].repo // empty' tests/sim-harness/plan.json)
+          if [ -n "$repo" ]; then
+            # a build kept in a private repo: fetched with the read-only token
+            tag=$(jq -r --arg v "$v" '.ersc_builds[$v].tag' tests/sim-harness/plan.json)
+            GH_TOKEN="$TESTBIN_TOKEN" gh release download "$tag" -R "$repo" -p ersc.dll -D app/Madeira/arm64ec-windows --clobber
+          else
+            curl -fsSL --retry 3 -o app/Madeira/arm64ec-windows/ersc.dll "$url"
+          fi
           echo "$sha  app/Madeira/arm64ec-windows/ersc.dll" | shasum -a 256 -c -
           echo "ersc.dll $v"
           # the mod's settings file, which ersc.dll reads next to itself (fatal error without it)
