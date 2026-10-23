@@ -33,12 +33,15 @@
  */
 
 #include <windows.h>
+#include <tlhelp32.h>
+#include <psapi.h>
 #include <stdio.h>
 #include <stdarg.h>
 #include <string.h>
 #include <stdlib.h>
 
 static HANDLE g_fh = INVALID_HANDLE_VALUE;
+static int g_resume, g_wait_ms = 20000;
 
 static void say(const char *fmt, ...)
 {
@@ -78,7 +81,88 @@ static void *const c_stubs[VT_N] = {
     vt_16, vt_17, vt_18, vt_19, vt_20, vt_21, vt_22, vt_23, vt_24, vt_25, vt_26, vt_27, vt_28, vt_29, vt_30, vt_31,
 };
 
+
+/* What a process's threads are doing and which windows it shows (a MessageBox's text is a
+ * Static child of its dialog): every thread's Rip/Rsp as module+offset, then each top-level
+ * window of that pid with its class, title and child texts. */
+static void where(HANDLE proc, ULONG64 a, char *out, size_t n)
+{
+    HMODULE mods[256]; DWORD need = 0;
+    snprintf(out, n, "%llx", a);
+    if (!EnumProcessModulesEx(proc, mods, sizeof(mods), &need, LIST_MODULES_ALL)) return;
+    for (unsigned i = 0; i < need / sizeof(HMODULE) && i < 256; i++) {
+        MODULEINFO mi; char name[64];
+        if (!GetModuleInformation(proc, mods[i], &mi, sizeof(mi))) continue;
+        if (a >= (ULONG64)mi.lpBaseOfDll && a < (ULONG64)mi.lpBaseOfDll + mi.SizeOfImage) {
+            if (!GetModuleBaseNameA(proc, mods[i], name, sizeof(name))) strcpy(name, "?");
+            snprintf(out, n, "%s+0x%llx", name, a - (ULONG64)mi.lpBaseOfDll);
+            return;
+        }
+    }
+}
+
+static BOOL CALLBACK child_text(HWND w, LPARAM l)
+{
+    char cls[64] = "", txt[512] = "";
+    (void)l;
+    GetClassNameA(w, cls, sizeof(cls));
+    GetWindowTextA(w, txt, sizeof(txt));
+    if (txt[0]) say("[ersc-load]     child %s: \"%s\"", cls, txt);
+    return TRUE;
+}
+
+static BOOL CALLBACK top_window(HWND w, LPARAM pid)
+{
+    DWORD p = 0; char cls[64] = "", txt[512] = "";
+    GetWindowThreadProcessId(w, &p);
+    if (p != (DWORD)pid) return TRUE;
+    GetClassNameA(w, cls, sizeof(cls));
+    GetWindowTextA(w, txt, sizeof(txt));
+    say("[ersc-load]   window %p class %s title \"%s\" visible %d", (void *)w, cls, txt, IsWindowVisible(w));
+    EnumChildWindows(w, child_text, 0);
+    return TRUE;
+}
+
+static void dump_process(DWORD pid, HANDLE proc)
+{
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+    THREADENTRY32 te = {sizeof(te)};
+    say("[ersc-load] --- threads of pid %lu", pid);
+    if (snap != INVALID_HANDLE_VALUE && Thread32First(snap, &te)) {
+        do {
+            if (te.th32OwnerProcessID != pid || te.th32ThreadID == GetCurrentThreadId()) continue;
+            HANDLE t = OpenThread(THREAD_ALL_ACCESS, FALSE, te.th32ThreadID);
+            if (!t) { say("[ersc-load]   thread %04lx: OpenThread error %lu", te.th32ThreadID, GetLastError()); continue; }
+            CONTEXT c; memset(&c, 0, sizeof(c)); c.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
+            DWORD sc = SuspendThread(t);
+            BOOL ok = GetThreadContext(t, &c);
+            if (sc != (DWORD)-1) ResumeThread(t);
+            char a[128] = "?", r[128] = "?";
+            if (ok) {
+                where(proc, c.Rip, a, sizeof(a));
+                ULONG64 ret = 0; SIZE_T got = 0;
+                if (ReadProcessMemory(proc, (void *)c.Rsp, &ret, 8, &got)) where(proc, ret, r, sizeof(r));
+                say("[ersc-load]   thread %04lx: rip %s rsp %llx [rsp] %s rax %llx rcx %llx", te.th32ThreadID, a, c.Rsp, r, c.Rax, c.Rcx);
+            } else say("[ersc-load]   thread %04lx: GetThreadContext error %lu", te.th32ThreadID, GetLastError());
+            CloseHandle(t);
+        } while (Thread32Next(snap, &te));
+    }
+    if (snap != INVALID_HANDLE_VALUE) CloseHandle(snap);
+    say("[ersc-load] --- windows of pid %lu", pid);
+    EnumWindows(top_window, (LPARAM)pid);
+}
+
 typedef ULONG64 (*ext_init_fn)(void *connector, void **extension);
+static ext_init_fn g_init;
+static DWORD WINAPI init_thread(void *arg)
+{
+    void *ext = NULL;
+    (void)arg;
+    say("[ersc-load] calling modengine_ext_init(%p, %p) ...", (void *)&g_connector, (void *)&ext);
+    ULONG64 r = g_init(&g_connector, &ext);
+    say("[ersc-load] modengine_ext_init returned 0x%llx, extension %p (vtable %p)", r, ext, ext ? *(void **)ext : NULL);
+    return 0;
+}
 
 static int load_self(const char *dll, int do_init)
 {
@@ -96,18 +180,19 @@ static int load_self(const char *dll, int do_init)
     say("[ersc-load] loaded at %p", (void *)h);
 
     if (do_init) {
-        ext_init_fn init = (ext_init_fn)GetProcAddress(h, "modengine_ext_init");
-        say("[ersc-load] modengine_ext_init = %p", (void *)init);
-        if (init) {
-            void *ext = NULL;
-            say("[ersc-load] calling modengine_ext_init(%p, %p) ...", (void *)&g_connector, (void *)&ext);
-            ULONG64 r = init(&g_connector, &ext);
-            say("[ersc-load] modengine_ext_init returned 0x%llx, extension %p (vtable %p)",
-                r, ext, ext ? *(void **)ext : NULL);
+        g_init = (ext_init_fn)GetProcAddress(h, "modengine_ext_init");
+        say("[ersc-load] modengine_ext_init = %p", (void *)g_init);
+        if (g_init) {
+            HANDLE t = CreateThread(NULL, 0, init_thread, NULL, 0, NULL);
+            if (WaitForSingleObject(t, 60000) != WAIT_OBJECT_0) {
+                say("[ersc-load] modengine_ext_init has not returned after 60 s");
+                dump_process(GetCurrentProcessId(), GetCurrentProcess());
+            }
         }
     }
-    say("[ersc-load] waiting 20 s for ersc.dll's threads ...");
-    Sleep(20000);
+    say("[ersc-load] waiting %d s for ersc.dll's threads ...", g_wait_ms / 1000);
+    Sleep(g_wait_ms);
+    dump_process(GetCurrentProcessId(), GetCurrentProcess());
     say("[ersc-load] still alive, exiting 0");
     return 0;
 }
@@ -137,8 +222,6 @@ static DWORD remote_load(HANDLE proc, const char *path, DWORD timeout_ms)
     CloseHandle(t);
     return w == WAIT_OBJECT_0 ? code : (DWORD)-1;
 }
-
-static int g_resume, g_wait_ms = 20000;
 
 static int inject(const char *dir)
 {
@@ -176,6 +259,7 @@ static int inject(const char *dir)
             GetExitCodeProcess(pi.hProcess, &code);
             say("[ersc-load] eldenring.exe ended (exit code %08lx)", code);
         } else {
+            dump_process(pi.dwProcessId, pi.hProcess);
             say("[ersc-load] eldenring.exe still alive, ending it");
             TerminateProcess(pi.hProcess, 0);
         }

@@ -13,55 +13,29 @@
   "variants": [
     {
       "ersc": "1.9.8",
+      "ntdll": "p2",
       "cfg_preset": "elden-ring-ersc",
       "cfg": [
         "quiet-log = 0"
       ],
-      "run": [
-        "ersc-load-x64.exe inject resume wait=150"
-      ],
       "timeout": 300,
-      "name": "ntdll-p2",
-      "ntdll": "p2"
+      "name": "p2-self",
+      "run": [
+        "ersc-load-x64.exe self wait=30"
+      ]
     },
     {
       "ersc": "1.9.8",
+      "ntdll": "p2",
       "cfg_preset": "elden-ring-ersc",
       "cfg": [
         "quiet-log = 0"
       ],
-      "run": [
-        "ersc-load-x64.exe inject resume wait=150"
-      ],
       "timeout": 300,
-      "name": "ntdll-p7",
-      "ntdll": "p7"
-    },
-    {
-      "ersc": "1.9.8",
-      "cfg_preset": "elden-ring-ersc",
-      "cfg": [
-        "quiet-log = 0"
-      ],
+      "name": "p2-inject",
       "run": [
-        "ersc-load-x64.exe inject resume wait=150"
-      ],
-      "timeout": 300,
-      "name": "b76",
-      "pe_release": "build-76"
-    },
-    {
-      "ersc": "1.9.8",
-      "cfg_preset": "elden-ring-ersc",
-      "cfg": [
-        "quiet-log = 0"
-      ],
-      "run": [
-        "ersc-load-x64.exe self"
-      ],
-      "timeout": 300,
-      "name": "ntdll-p2-self",
-      "ntdll": "p2"
+        "ersc-load-x64.exe inject resume wait=60"
+      ]
     }
   ],
   "ntdll_builds": {
