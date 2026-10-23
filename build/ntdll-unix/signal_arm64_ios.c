@@ -8113,8 +8113,10 @@ static int ios_mach_deliver_guest_exception_inner( thread_t thread, arm_thread_s
     {
         static int host_decline_n;   /* sim-seh: which host-pc faults go to the signal path */
 
-        /* sim-seh: a unix-side store into a write-trapped guest page is emulated on the
-         * faulting thread by segv_handler (ios_unix_store_into_guest); decline it here. */
+        /* sim-seh: a unix-side store into a write-trapped guest page lands here */
+        if (!is_align && rec.ExceptionInformation[0] == EXCEPTION_WRITE_FAULT &&
+            ios_mach_unix_store_into_guest( state, fault_addr ))
+            return 1;
         if (host_decline_n < 16)
         {
             host_decline_n++;
@@ -8406,6 +8408,93 @@ dispatch:
  * them needing its own iOS special case. Wrapper rather than inline flag
  * management so no early return can leak the flag set — that would silence
  * wine's logging process-wide and destroy the next run's diagnostics. */
+/***********************************************************************
+ *           ios_mach_unix_store_into_guest   (sim-seh)
+ *
+ * A syscall's unix side storing its result into a guest page the host maps read-only
+ * because FEX keeps it write-trapped for self-modifying code (MADEIRA_SMC_HOST_PAGE;
+ * Themida's EXECUTE|WRITE sections). Seamless Co-op's ersc.dll hands NtOpenThreadToken a
+ * handle pointer inside its own image, and the unix `*handle = 0` faulted. That fault
+ * cannot become a guest exception: the thread is inside the syscall, on the stack just below
+ * its syscall frame, and the first syscall the exception path makes (FEX's untrap is an
+ * NtProtectVirtualMemory) reuses that stack and overwrote the delivered record and context
+ * (the guest saw an EXEC fault at a host pc, FEX read Pc=0x7c). On Windows the kernel's
+ * store lands. So land it: make the host page writable for the one store, perform it,
+ * restore the protection and step the thread past it. FEX's trap stays armed; a few
+ * result bytes are not code. Plain STR/STRB/STRH/STP with an immediate offset and no
+ * writeback, from code of the image holding this handler (the unix side) only.
+ */
+static int ios_mach_unix_store_into_guest( arm_thread_state64_t *state, uintptr_t fault_addr )
+{
+    static int n;
+    uintptr_t pc = (uintptr_t)arm_thread_state64_get_pc( *state ), ea, page, end;
+    mach_vm_address_t ra;
+    mach_vm_size_t rs;
+    vm_region_basic_info_data_64_t info;
+    mach_msg_type_number_t cnt = VM_REGION_BASIC_INFO_COUNT_64;
+    mach_port_t obj = MACH_PORT_NULL;
+    Dl_info a, b;
+    uint32_t insn;
+    uint64_t v1, v2 = 0;
+    int size, pair, rn, rt, rt2;
+    kern_return_t kr;
+
+    if (fault_addr < 0x100000000ULL) return 0;
+    if (!dladdr( (void *)pc, &a ) || !dladdr( (void *)ios_mach_unix_store_into_guest, &b ) ||
+        a.dli_fbase != b.dli_fbase) return 0;
+    insn = *(const uint32_t *)pc;
+    rn = (insn >> 5) & 31; rt = insn & 31; rt2 = (insn >> 10) & 31;
+    {
+        uintptr_t base = rn == 31 ? (uintptr_t)arm_thread_state64_get_sp( *state ) : (uintptr_t)state->__x[rn];
+        if (rn == 29) base = (uintptr_t)arm_thread_state64_get_fp( *state );
+        if ((insn & 0x3FC00000) == 0x39000000)                       /* STR* unsigned offset */
+        {
+            size = 1 << ((insn >> 30) & 3); pair = 0;
+            ea = base + (((insn >> 10) & 0xfff) * size);
+        }
+        else if ((insn & 0x7FC00000) == 0x29000000)                  /* STP signed offset */
+        {
+            size = (insn >> 31) ? 8 : 4; pair = 1;
+            ea = base + (uintptr_t)((intptr_t)((int32_t)(insn << 10) >> 25) * size);
+        }
+        else return 0;
+    }
+#define IOS_XREG(r) ((r) == 31 ? 0 : (r) == 29 ? (uint64_t)arm_thread_state64_get_fp( *state ) : \
+                     (r) == 30 ? (uint64_t)arm_thread_state64_get_lr( *state ) : (uint64_t)state->__x[r])
+    v1 = IOS_XREG( rt );
+    if (pair) v2 = IOS_XREG( rt2 );
+#undef IOS_XREG
+    if (fault_addr < ea || fault_addr >= ea + size * (pair ? 2 : 1)) return 0;
+
+    page = ea & ~(uintptr_t)0x3fff;
+    end = (ea + size * 2 + 0x3fff) & ~(uintptr_t)0x3fff;
+    ra = page;
+    if (mach_vm_region( mach_task_self(), &ra, &rs, VM_REGION_BASIC_INFO_64,
+                        (vm_region_info_t)&info, &cnt, &obj ) != KERN_SUCCESS) return 0;
+    if (ra > page || (info.protection & VM_PROT_WRITE) || !(info.protection & VM_PROT_READ) ||
+        !(info.max_protection & VM_PROT_WRITE)) return 0;
+    if (mach_vm_protect( mach_task_self(), page, end - page, FALSE, VM_PROT_READ | VM_PROT_WRITE ) != KERN_SUCCESS)
+        return 0;
+    {
+        unsigned char buf[16];
+        memcpy( buf, &v1, size );
+        if (pair) memcpy( buf + size, &v2, size );
+        kr = mach_vm_write( mach_task_self(), ea, (vm_offset_t)buf, size * (pair ? 2 : 1) );
+    }
+    mach_vm_protect( mach_task_self(), page, end - page, FALSE, info.protection );
+    if (kr != KERN_SUCCESS) return 0;
+    __darwin_arm_thread_state64_set_pc_fptr( *state, (void *)(pc + 4) );
+    if (n < 16)
+    {
+        n++;
+        dprintf( 2, "[unix-store] sim-seh #%d %s+0x%lx stored %d bytes to write-trapped guest page 0x%lx (prot %x) insn %08x\n",
+                 n, a.dli_sname ? a.dli_sname : "?", (unsigned long)(pc - (uintptr_t)a.dli_saddr),
+                 size * (pair ? 2 : 1), (unsigned long)ea, info.protection, insn );
+    }
+    return 1;
+}
+
+
 static int ios_mach_deliver_guest_exception( thread_t thread, arm_thread_state64_t *state,
                                              arm_neon_state64_t *neon, int have_neon,
                                              int exception, uintptr_t fault_addr,
