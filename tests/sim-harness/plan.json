@@ -12,7 +12,7 @@
   },
   "variants": [
     {
-      "ersc": "1.9.8",
+      "ersc": "2.0.1",
       "ntdll": "p2",
       "cfg_preset": "elden-ring-ersc",
       "cfg": [
@@ -21,11 +21,11 @@
       "timeout": 300,
       "name": "p2-self",
       "run": [
-        "ersc-load-x64.exe self wait=30"
+        "ersc-load-x64.exe self wait=60"
       ]
     },
     {
-      "ersc": "1.9.8",
+      "ersc": "2.0.1",
       "ntdll": "p2",
       "cfg_preset": "elden-ring-ersc",
       "cfg": [
@@ -34,11 +34,11 @@
       "timeout": 300,
       "name": "p2-inject",
       "run": [
-        "ersc-load-x64.exe inject resume wait=60"
+        "ersc-load-x64.exe inject resume wait=90"
       ]
     },
     {
-      "ersc": "1.9.8",
+      "ersc": "2.0.1",
       "ntdll": "p7",
       "cfg_preset": "elden-ring-ersc",
       "cfg": [
@@ -47,7 +47,20 @@
       "timeout": 300,
       "name": "p7-self",
       "run": [
-        "ersc-load-x64.exe self wait=30"
+        "ersc-load-x64.exe self wait=60"
+      ]
+    },
+    {
+      "ersc": "2.0.1",
+      "cfg_preset": "elden-ring-ersc",
+      "cfg": [
+        "quiet-log = 0"
+      ],
+      "timeout": 300,
+      "name": "b76-self",
+      "pe_release": "build-76",
+      "run": [
+        "ersc-load-x64.exe self wait=60"
       ]
     }
   ],
