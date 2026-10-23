@@ -484,6 +484,28 @@ jobs:
           # the mod's settings file, which ersc.dll reads next to itself (fatal error without it)
           cp tests/sim-harness/ersc_settings.ini app/Madeira/arm64ec-windows/ersc_settings.ini
 
+      # The game's eldenring.exe for "inject" (started suspended, never resumed: ersc.dll only
+      # scans its code). From a PRIVATE repo with a read-only token (secret TESTBIN_TOKEN),
+      # checked against plan.json's sha256. Never committed, never part of an artifact.
+      - name: Game exe (private)
+        env:
+          GH_TOKEN: ${{ secrets.TESTBIN_TOKEN }}
+        run: |
+          set -euo pipefail
+          g=$(jq -r '.game_exe // empty' <<<"$VARIANT")
+          [ -n "$g" ] || { echo "no game exe for this variant"; exit 0; }
+          [ -n "$GH_TOKEN" ] || { echo "::error::secret TESTBIN_TOKEN is not set"; exit 1; }
+          repo=$(jq -r --arg g "$g" '.game_builds[$g].repo' tests/sim-harness/plan.json)
+          tag=$(jq -r --arg g "$g" '.game_builds[$g].tag' tests/sim-harness/plan.json)
+          sha=$(jq -r --arg g "$g" '.game_builds[$g].sha256' tests/sim-harness/plan.json)
+          gh release download "$tag" -R "$repo" -p eldenring.7z -D "$RUNNER_TEMP/game" --clobber
+          command -v 7z >/dev/null || brew install --quiet p7zip
+          7z x -y -o"$RUNNER_TEMP/game" "$RUNNER_TEMP/game/eldenring.7z" eldenring.exe >/dev/null
+          echo "$sha  $RUNNER_TEMP/game/eldenring.exe" | shasum -a 256 -c -
+          mv "$RUNNER_TEMP/game/eldenring.exe" app/Madeira/arm64ec-windows/eldenring.exe
+          rm -rf "$RUNNER_TEMP/game"
+          echo "eldenring.exe ($g) in place of the loader's copy"
+
       - name: Build the harness
         run: tests/sim-harness/build.sh
       - name: Boot the simulator

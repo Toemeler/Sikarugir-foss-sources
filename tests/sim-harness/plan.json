@@ -19,22 +19,24 @@
         "quiet-log = 0"
       ],
       "timeout": 1500,
-      "name": "p2-self",
+      "game_exe": "er",
+      "name": "p2-game",
       "run": [
-        "ersc-load-x64.exe self wait=60"
+        "ersc-load-x64.exe inject wait=120"
       ]
     },
     {
       "ersc": "2.0.1",
-      "ntdll": "p2",
+      "ntdll": "p7",
       "cfg_preset": "elden-ring-ersc",
       "cfg": [
         "quiet-log = 0"
       ],
       "timeout": 1500,
-      "name": "p2-inject",
+      "game_exe": "er",
+      "name": "p7-game",
       "run": [
-        "ersc-load-x64.exe inject resume wait=120"
+        "ersc-load-x64.exe inject wait=120"
       ]
     }
   ],
@@ -46,5 +48,12 @@
       ]
     },
     "p7": {}
+  },
+  "game_builds": {
+    "er": {
+      "repo": "Toemeler/er-testbin-private",
+      "tag": "game-exe",
+      "sha256": "34102b1c08bb5f769a724427a6f70fe29b3b732c31cf73693f861c48d3492ddb"
+    }
   }
 }
