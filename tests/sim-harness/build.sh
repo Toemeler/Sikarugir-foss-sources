@@ -174,6 +174,14 @@ for r in arm64ec-windows aarch64-windows i386-windows nls x86_64-vcruntime; do
     [ -d "$A/$r" ] && cp -R "$A/$r" "$APP/$r"
 done
 for r in prefix-template.tar.gz cacert.pem; do cp "$A/$r" "$APP/$r"; done
+# Upper-case aliases (GDI32.dll -> gdi32.dll): a DLL that names its imports in upper case
+# (the game, DXMT's dxgi.dll) misses them in this bundle, which sits on a case-sensitive
+# volume, where Wine's fallback opens <bundle>/arm64ec-windows/<name as written>.
+( cd "$APP/arm64ec-windows" && for f in *.dll; do
+    u="$(printf '%s' "${f%.dll}" | tr '[:lower:]' '[:upper:]').dll"
+    [ -e "$u" ] || ln -s "$f" "$u"
+  done )
+echo "upper-case DLL aliases: $(find "$APP/arm64ec-windows" -maxdepth 1 -type l -name '*.dll' | wc -l)"
 codesign -f -s - "$APP/madeira-sim"
 codesign -f -s - "$APP" 2>/dev/null || true
 xcrun vtool -show-build "$APP/madeira-sim" | grep -E 'platform|minos|sdk' || true
