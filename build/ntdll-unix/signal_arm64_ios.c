@@ -1233,6 +1233,7 @@ static int ios_mach_deliver_guest_exception( thread_t thread, arm_thread_state64
                                              arm_neon_state64_t *neon, int have_neon,
                                              int exception, uintptr_t fault_addr,
                                              uintptr_t thread_teb );
+static int ios_mach_unix_store_into_guest( arm_thread_state64_t *state, uintptr_t fault_addr );
 
 #ifdef WINE_IOS
 /***********************************************************************
