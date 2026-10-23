@@ -8485,9 +8485,8 @@ static int ios_mach_unix_store_into_guest( arm_thread_state64_t *state, uintptr_
     mach_vm_protect( mach_task_self(), page, end - page, FALSE, info.protection );
     if (kr != KERN_SUCCESS) return 0;
     __darwin_arm_thread_state64_set_pc_fptr( *state, (void *)(pc + 4) );
-    if (n < 16)
+    if (++n <= 16 || !(n % 1000))
     {
-        n++;
         dprintf( 2, "[unix-store] sim-seh #%d %s+0x%lx stored %d bytes to write-trapped guest page 0x%lx (prot %x) insn %08x\n",
                  n, a.dli_sname ? a.dli_sname : "?", (unsigned long)(pc - (uintptr_t)a.dli_saddr),
                  size * (pair ? 2 : 1), (unsigned long)ea, info.protection, insn );
@@ -8974,9 +8973,8 @@ static int ios_unix_store_into_guest( siginfo_t *siginfo, ucontext_t *context, D
     mach_vm_protect( mach_task_self(), page, end - page, FALSE, info.protection );
     if (!ok) return 0;
     PC_sig(context) += 4;
-    if (n < 16)
+    if (++n <= 16 || !(n % 1000))
     {
-        n++;
         dprintf( 2, "[unix-store] sim-seh #%d %s+0x%lx stored to write-trapped guest page 0x%lx (prot %x) insn %08x\n",
                  n, a.dli_sname ? a.dli_sname : "?", (unsigned long)(pc - (uintptr_t)a.dli_saddr),
                  (unsigned long)addr, info.protection, insn );
