@@ -36,6 +36,19 @@
       "run": [
         "ersc-load-x64.exe inject resume wait=60"
       ]
+    },
+    {
+      "ersc": "1.9.8",
+      "ntdll": "p7",
+      "cfg_preset": "elden-ring-ersc",
+      "cfg": [
+        "quiet-log = 0"
+      ],
+      "timeout": 300,
+      "name": "p7-self",
+      "run": [
+        "ersc-load-x64.exe self wait=30"
+      ]
     }
   ],
   "ntdll_builds": {

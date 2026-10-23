@@ -481,6 +481,8 @@ jobs:
           curl -fsSL --retry 3 -o app/Madeira/arm64ec-windows/ersc.dll "$url"
           echo "$sha  app/Madeira/arm64ec-windows/ersc.dll" | shasum -a 256 -c -
           echo "ersc.dll $v"
+          # the mod's settings file, which ersc.dll reads next to itself (fatal error without it)
+          cp tests/sim-harness/ersc_settings.ini app/Madeira/arm64ec-windows/ersc_settings.ini
 
       - name: Build the harness
         run: tests/sim-harness/build.sh
