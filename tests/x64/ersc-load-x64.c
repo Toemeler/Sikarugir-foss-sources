@@ -101,12 +101,34 @@ static void where(HANDLE proc, ULONG64 a, char *out, size_t n)
     }
 }
 
+/* user32 by name at run time: the exe's own import of USER32.dll is not found in the
+ * simulator prefix (its DLL lookup is case-sensitive). */
+static int (WINAPI *pGetClassNameA)(HWND, LPSTR, int);
+static int (WINAPI *pGetWindowTextA)(HWND, LPSTR, int);
+static BOOL (WINAPI *pEnumChildWindows)(HWND, WNDENUMPROC, LPARAM);
+static BOOL (WINAPI *pEnumWindows)(WNDENUMPROC, LPARAM);
+static DWORD (WINAPI *pGetWindowThreadProcessId)(HWND, LPDWORD);
+static BOOL (WINAPI *pIsWindowVisible)(HWND);
+static int user32_ok(void)
+{
+    HMODULE u = LoadLibraryA("user32.dll");
+    if (!u) return 0;
+    pGetClassNameA = (void *)GetProcAddress(u, "GetClassNameA");
+    pGetWindowTextA = (void *)GetProcAddress(u, "GetWindowTextA");
+    pEnumChildWindows = (void *)GetProcAddress(u, "EnumChildWindows");
+    pEnumWindows = (void *)GetProcAddress(u, "EnumWindows");
+    pGetWindowThreadProcessId = (void *)GetProcAddress(u, "GetWindowThreadProcessId");
+    pIsWindowVisible = (void *)GetProcAddress(u, "IsWindowVisible");
+    return pGetClassNameA && pGetWindowTextA && pEnumChildWindows && pEnumWindows &&
+           pGetWindowThreadProcessId && pIsWindowVisible;
+}
+
 static BOOL CALLBACK child_text(HWND w, LPARAM l)
 {
     char cls[64] = "", txt[512] = "";
     (void)l;
-    GetClassNameA(w, cls, sizeof(cls));
-    GetWindowTextA(w, txt, sizeof(txt));
+    pGetClassNameA(w, cls, sizeof(cls));
+    pGetWindowTextA(w, txt, sizeof(txt));
     if (txt[0]) say("[ersc-load]     child %s: \"%s\"", cls, txt);
     return TRUE;
 }
@@ -114,12 +136,12 @@ static BOOL CALLBACK child_text(HWND w, LPARAM l)
 static BOOL CALLBACK top_window(HWND w, LPARAM pid)
 {
     DWORD p = 0; char cls[64] = "", txt[512] = "";
-    GetWindowThreadProcessId(w, &p);
+    pGetWindowThreadProcessId(w, &p);
     if (p != (DWORD)pid) return TRUE;
-    GetClassNameA(w, cls, sizeof(cls));
-    GetWindowTextA(w, txt, sizeof(txt));
-    say("[ersc-load]   window %p class %s title \"%s\" visible %d", (void *)w, cls, txt, IsWindowVisible(w));
-    EnumChildWindows(w, child_text, 0);
+    pGetClassNameA(w, cls, sizeof(cls));
+    pGetWindowTextA(w, txt, sizeof(txt));
+    say("[ersc-load]   window %p class %s title \"%s\" visible %d", (void *)w, cls, txt, pIsWindowVisible(w));
+    pEnumChildWindows(w, child_text, 0);
     return TRUE;
 }
 
@@ -149,7 +171,7 @@ static void dump_process(DWORD pid, HANDLE proc)
     }
     if (snap != INVALID_HANDLE_VALUE) CloseHandle(snap);
     say("[ersc-load] --- windows of pid %lu", pid);
-    EnumWindows(top_window, (LPARAM)pid);
+    if (user32_ok()) pEnumWindows(top_window, (LPARAM)pid);
 }
 
 typedef ULONG64 (*ext_init_fn)(void *connector, void **extension);
