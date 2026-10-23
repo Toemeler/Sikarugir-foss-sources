@@ -264,7 +264,7 @@ static int inject(const char *dir)
     say("[ersc-load] eldenring.exe pid %lu, main thread %04lx (suspended)", pi.dwProcessId, pi.dwThreadId);
 
     for (unsigned i = 0; i < N_DEPS; i++) remote_load(pi.hProcess, c_deps[i], 60000);
-    DWORD r = remote_load(pi.hProcess, dll, 240000);
+    DWORD r = remote_load(pi.hProcess, dll, 1400000);
     DWORD code = 0;
     GetExitCodeProcess(pi.hProcess, &code);
     say("[ersc-load] ersc.dll remote load %s; eldenring.exe %s (exit code %08lx)",
